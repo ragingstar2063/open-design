@@ -1,0 +1,6 @@
+name = "open-design-telemetry-relay"
+main = "src/index.ts"
+compatibility_date = "2026-05-01"
+
+[vars]
+LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"

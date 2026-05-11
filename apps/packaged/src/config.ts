@@ -21,6 +21,7 @@ export type RawPackagedConfig = {
   namespaceBaseRoot?: string;
   nodeCommandRelative?: string;
   resourceRoot?: string;
+  telemetryRelayUrl?: string;
   webSidecarEntryRelative?: string;
   webStandaloneRoot?: string;
   webOutputMode?: string;
@@ -34,6 +35,7 @@ export type PackagedConfig = {
   namespaceBaseRoot: string;
   nodeCommand: string | null;
   resourceRoot: string;
+  telemetryRelayUrl: string | null;
   webSidecarEntry: string | null;
   webStandaloneRoot: string | null;
   webOutputMode: PackagedWebOutputMode;
@@ -152,6 +154,7 @@ export async function readPackagedConfig(): Promise<PackagedConfig> {
     namespaceBaseRoot,
     nodeCommand,
     resourceRoot,
+    telemetryRelayUrl: cleanOptionalString(raw.telemetryRelayUrl),
     webSidecarEntry,
     webStandaloneRoot,
     webOutputMode,
