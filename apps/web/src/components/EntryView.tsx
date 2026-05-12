@@ -48,6 +48,7 @@ interface Props {
   designSystems: DesignSystemSummary[];
   projects: Project[];
   templates: ProjectTemplate[];
+  onDeleteTemplate: (id: string) => Promise<boolean>;
   promptTemplates: PromptTemplateSummary[];
   defaultDesignSystemId: string | null;
   config: AppConfig;
@@ -68,6 +69,7 @@ interface Props {
   onOpenProject: (id: string) => void;
   onOpenLiveArtifact: (projectId: string, artifactId: string) => void;
   onDeleteProject: (id: string) => void;
+  onRenameProject: (id: string, name: string) => void;
   onChangeDefaultDesignSystem: (id: string) => void;
   onOpenSettings: (section?: 'execution' | 'media' | 'composio' | 'language' | 'appearance' | 'notifications' | 'pet' | 'about') => void;
   onAdoptPet: () => void;
@@ -225,6 +227,7 @@ export function EntryView({
   designSystems,
   projects,
   templates,
+  onDeleteTemplate,
   promptTemplates,
   defaultDesignSystemId,
   config,
@@ -240,6 +243,7 @@ export function EntryView({
   onOpenProject,
   onOpenLiveArtifact,
   onDeleteProject,
+  onRenameProject,
   onChangeDefaultDesignSystem,
   onOpenSettings,
   onAdoptPet,
@@ -416,6 +420,7 @@ export function EntryView({
           designSystems={designSystems}
           defaultDesignSystemId={defaultDesignSystemId}
           templates={templates}
+          onDeleteTemplate={onDeleteTemplate}
           promptTemplates={promptTemplates}
           onCreate={handleCreate}
           onImportClaudeDesign={onImportClaudeDesign}
@@ -486,6 +491,16 @@ export function EntryView({
             </div>
             <a
               className="foot-pill foot-pill-follow"
+              href="https://discord.com/invite/qhbcCH8Am4"
+              target="_blank"
+              rel="noreferrer noopener"
+              title="Join the Open Design Discord community"
+              aria-label="Join the Open Design Discord community"
+            >
+              <Icon name="discord" size={12} />
+            </a>
+            <a
+              className="foot-pill foot-pill-follow"
               href="https://x.com/nexudotio"
               target="_blank"
               rel="noreferrer noopener"
@@ -549,6 +564,7 @@ export function EntryView({
                 onOpen={onOpenProject}
                 onOpenLiveArtifact={onOpenLiveArtifact}
                 onDelete={onDeleteProject}
+                onRename={onRenameProject}
               />
             )
           ) : null}

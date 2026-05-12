@@ -71,6 +71,7 @@ import type {
   ChatAttachment,
   ChatCommentAttachment,
   ChatMessage,
+  ChatMessageFeedbackChange,
   Conversation,
   DesignSystemSummary,
   OpenTabsState,
@@ -96,6 +97,7 @@ import { ChatPane } from './ChatPane';
 import { decideAutoOpenAfterWrite } from './auto-open-file';
 import { FileWorkspace } from './FileWorkspace';
 import { CenteredLoader } from './Loading';
+import { ProjectActionsToolbar } from './ProjectActionsToolbar';
 import { Toast } from './Toast';
 import { useDesignMdState } from '../hooks/useDesignMdState';
 import { useFinalizeProject } from '../hooks/useFinalizeProject';
@@ -719,8 +721,11 @@ export function ProjectView({
   // mount we also do an initial pull so attachments staged before the
   // agent has written anything still see the user's pasted images.
   useEffect(() => {
-    if (!daemonLive) return;
-    void refreshWorkspaceItems();
+    void refreshWorkspaceItems().catch(() => {
+      // The daemon probe can briefly lag behind a just-started local
+      // runtime. Retry when daemonLive flips or the explicit refresh key
+      // changes instead of leaving the project view in its empty shell.
+    });
   }, [daemonLive, refreshWorkspaceItems, filesRefresh]);
 
   // Live-reload: when the daemon's chokidar watcher reports a file change,
@@ -761,7 +766,9 @@ export function ProjectView({
   const lastSyncedFileRef = useRef<string | null>(null);
   useEffect(() => {
     const target = openTabsState.active && (
-      projectFileNames.has(openTabsState.active) || isLiveArtifactTabId(openTabsState.active)
+      openTabsState.tabs.includes(openTabsState.active)
+      || projectFileNames.has(openTabsState.active)
+      || isLiveArtifactTabId(openTabsState.active)
     )
       ? openTabsState.active
       : null;
@@ -915,6 +922,37 @@ export function ProjectView({
       });
     },
     [project.id, activeConversationId],
+  );
+
+  const handleAssistantFeedback = useCallback(
+    (assistantMessage: ChatMessage, change: ChatMessageFeedbackChange) => {
+      const now = Date.now();
+      updateMessageById(
+        assistantMessage.id,
+        (prev) =>
+          change
+            ? {
+                ...prev,
+                feedback: {
+                  rating: change.rating,
+                  reasonCodes: change.reasonCodes,
+                  customReason: change.customReason,
+                  reasonsSubmittedAt: change.reasonsSubmittedAt,
+                  createdAt:
+                    prev.feedback?.rating === change.rating
+                      ? prev.feedback.createdAt
+                      : now,
+                  updatedAt: now,
+                },
+              }
+            : {
+                ...prev,
+                feedback: undefined,
+              },
+        true,
+      );
+    },
+    [updateMessageById],
   );
 
   const appendAssistantErrorEvent = useCallback(
@@ -2381,6 +2419,14 @@ export function ProjectView({
           ) : null}
         </div>
       </AppChromeHeader>
+      <ProjectActionsToolbar
+        designMdState={designMdState}
+        finalizeStatus={finalize.status}
+        onFinalize={handleFinalize}
+        onCancelFinalize={handleCancelFinalize}
+        onContinueInCli={handleContinueInCli}
+        hidden={workspaceFocused}
+      />
       <div
         ref={splitRef}
         className={[
@@ -2423,6 +2469,7 @@ export function ProjectView({
                 void handleSend(text, [], []);
               }}
               onContinueRemainingTasks={handleContinueRemainingTasks}
+              onAssistantFeedback={handleAssistantFeedback}
               onNewConversation={handleNewConversation}
               newConversationDisabled={newConversationDisabled}
               conversations={conversations}
