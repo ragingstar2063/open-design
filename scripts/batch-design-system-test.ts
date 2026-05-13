@@ -384,6 +384,17 @@ async function resolvePrompt(config: BatchConfig): Promise<string> {
   throw new Error('missing prompt: pass --prompt, --prompt-file, or config.prompt');
 }
 
+export function resolveDryRunDesignSystems(config: BatchConfig): string[] {
+  if (config.allDesignSystems) {
+    throw new Error('dry-run with --all-design-systems still requires daemon access; pass explicit --design-systems instead');
+  }
+  const ids = config.designSystems ?? [];
+  if (ids.length === 0) {
+    throw new Error('missing design systems: pass --design-systems, --design-system, --all-design-systems, or config.designSystems');
+  }
+  return dedupeDesignSystemIds(ids);
+}
+
 async function resolveDesignSystems(daemonUrl: string, config: BatchConfig): Promise<string[]> {
   const body = await api<DesignSystemsResponse>(daemonUrl, 'GET', '/api/design-systems');
   const systems = body.designSystems ?? body.systems ?? [];
@@ -578,13 +589,10 @@ async function main(): Promise<void> {
   const cli = parseArgs(process.argv.slice(2));
   const fileConfig = await readConfig(cli.configPath);
   const config = mergeConfig(fileConfig, cli);
-  const daemonUrl = await resolveDaemonUrl(config);
   const prompt = await resolvePrompt(config);
-  const designSystems = await resolveDesignSystems(daemonUrl, config);
-  const agentId = await resolveAgentId(daemonUrl, config);
   const resolved = {
     ...config,
-    agentId,
+    agentId: typeof config.agentId === 'string' && config.agentId.trim() ? config.agentId.trim() : FALLBACK_AGENT_ID,
     startRuns: config.startRuns ?? true,
     wait: config.wait ?? true,
     skipDiscoveryBrief: config.skipDiscoveryBrief ?? true,
@@ -592,11 +600,28 @@ async function main(): Promise<void> {
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
 
+  if (resolved.dryRun) {
+    const designSystems = resolveDryRunDesignSystems(config);
+    const daemonUrl =
+      config.daemonUrl ??
+      process.env.OD_DAEMON_URL ??
+      (isDiscoverablePort(process.env.OD_PORT) ? `http://127.0.0.1:${process.env.OD_PORT}` : '(not resolved in dry-run)');
+
+    console.log(`design-system batch → ${daemonUrl}`);
+    console.log(`prompt: ${prompt.slice(0, 120)}${prompt.length > 120 ? '…' : ''}`);
+    console.log(`design systems (${designSystems.length}): ${designSystems.join(', ')}`);
+    console.log(`agent=${resolved.agentId} skill=${resolved.skillId ?? 'null'} startRuns=${resolved.startRuns} wait=${resolved.wait} concurrency=${resolved.concurrency}`);
+    return;
+  }
+
+  const daemonUrl = await resolveDaemonUrl(config);
+  const designSystems = await resolveDesignSystems(daemonUrl, config);
+  resolved.agentId = await resolveAgentId(daemonUrl, config);
+
   console.log(`design-system batch → ${daemonUrl}`);
   console.log(`prompt: ${prompt.slice(0, 120)}${prompt.length > 120 ? '…' : ''}`);
   console.log(`design systems (${designSystems.length}): ${designSystems.join(', ')}`);
   console.log(`agent=${resolved.agentId} skill=${resolved.skillId ?? 'null'} startRuns=${resolved.startRuns} wait=${resolved.wait} concurrency=${resolved.concurrency}`);
-  if (resolved.dryRun) return;
 
   if (resolved.output) {
     const absolute = path.resolve(REPO_ROOT, resolved.output);
