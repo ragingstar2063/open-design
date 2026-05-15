@@ -5,7 +5,7 @@
 >
 > Figma'ya açık kaynaklı, agent-native bir alternatif — iki haftada 40k stars bizi buraya getirdi. **Yolun geri kalanını birlikte yürüyelim.**
 >
-> **`main` üzerinde hızlı iterasyon** — 0.8.0 Open Design'in bir sonraki aşaması. Katkıların, fikirlerin ve geri bildirimlerin neyin ardından geleceğini şekillendiriyor.
+> **`main` üzerinde hızlı iterasyon** — 0.8.0 Open Design'in bir sonraki aşaması. Bir PR gönder, çılgın bir fikir at, bir bug bildir — sen ne getirirsen bu hareket o olur.
 >
 > → [**Duyuruyu oku · kurulum dosyasını indir · harekete katıl**](https://github.com/nexu-io/open-design/discussions/1727) · mevcut 0.7'nin yanına paralel kurulur.
 
