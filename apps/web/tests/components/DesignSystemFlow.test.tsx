@@ -234,6 +234,12 @@ describe('DesignSystemCreationFlow', () => {
     expect(mocks.patchProject).toHaveBeenCalledWith(
       project.id,
       expect.objectContaining({
+        pendingPrompt: expect.stringContaining('include React, ReactDOM, and Babel standalone scripts'),
+      }),
+    );
+    expect(mocks.patchProject).toHaveBeenCalledWith(
+      project.id,
+      expect.objectContaining({
         pendingPrompt: expect.stringContaining('do not leave manifest text pointing to older preview names'),
       }),
     );
@@ -295,6 +301,11 @@ describe('DesignSystemCreationFlow', () => {
       project.id,
       'context/source-context.md',
       expect.stringContaining('app shell component must compose those roles'),
+    );
+    expect(mocks.writeProjectTextFile).toHaveBeenCalledWith(
+      project.id,
+      'context/source-context.md',
+      expect.stringContaining('include React, ReactDOM, and Babel standalone scripts'),
     );
     expect(mocks.writeProjectTextFile).toHaveBeenCalledWith(
       project.id,

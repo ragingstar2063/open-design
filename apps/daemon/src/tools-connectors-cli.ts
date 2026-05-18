@@ -1632,6 +1632,14 @@ async function auditDesignSystemPackage(
         'ui_kits/app/index.html',
       );
     }
+    if (uiKitIndexLoadsJsxComponents(uiKitIndexText, uiKitScriptComponentFiles) && !uiKitIndexHasBrowserJsxRuntime(uiKitIndexText)) {
+      addIssue(
+        'error',
+        'ui_kit_index_missing_jsx_runtime',
+        'ui_kits/app/index.html directly loads JSX/TSX component files, so it must include React, ReactDOM, and Babel standalone scripts or use compiled browser-ready JavaScript instead.',
+        'ui_kits/app/index.html',
+      );
+    }
   }
   if (hasComponentEvidence && uiKitComponentFiles.length < 3) {
     addIssue(
@@ -1862,6 +1870,19 @@ function normalizeAnchorText(text: string): string {
 
 function uiKitIndexHasRuntimeBootstrap(text: string): boolean {
   return /ReactDOM\.createRoot\s*\(|\bcreateRoot\s*\(|ReactDOM\.render\s*\(|\broot\.render\s*\(|\brender\s*\(\s*<|customElements\.define\s*\(|\bmount\s*\(|document\.(?:getElementById|querySelector)\([^)]*\)\.(?:append|appendChild|replaceChildren)\s*\(|document\.(?:getElementById|querySelector)\([^)]*\)\.innerHTML\s*=/iu.test(text);
+}
+
+function uiKitIndexLoadsJsxComponents(text: string, componentFiles: string[]): boolean {
+  return componentFiles
+    .filter((filePath) => /\.(jsx|tsx)$/iu.test(filePath))
+    .some((filePath) => text.includes(path.basename(filePath)));
+}
+
+function uiKitIndexHasBrowserJsxRuntime(text: string): boolean {
+  const hasReact = /\breact(?:\.development|\.production)?\.js\b|\breact@\d|from\s+['"][^'"]*react(?:\/[^'"]*)?['"]|\bReact\./iu.test(text);
+  const hasReactDom = /\breact-dom\b|react-dom(?:\.development|\.production)?\.js\b|from\s+['"][^'"]*react-dom(?:\/[^'"]*)?['"]|\bReactDOM\./iu.test(text);
+  const hasBabel = /@babel\/standalone|babel\.min\.js|\bBabel\.transform\b/iu.test(text);
+  return hasReact && hasReactDom && hasBabel;
 }
 
 function componentNamesComposedInUiKitIndex(text: string, componentFiles: string[]): string[] {
