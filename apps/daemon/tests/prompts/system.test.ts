@@ -98,7 +98,7 @@ describe('composeSystemPrompt', () => {
     );
     expect(prompt).toContain('Do not ask the user to pick a separate theme color');
     expect(prompt).toContain('Do not emit a direction question-form');
-    expect(prompt).toContain('Do not emit `<question-form id="direction">`');
+    expect(prompt).not.toContain('<question-form id="direction"');
     expect(prompt).not.toContain('Pick a visual direction');
     expect(prompt.indexOf('## Active design system visual direction')).toBeGreaterThan(
       prompt.indexOf('### direction-picker'),
