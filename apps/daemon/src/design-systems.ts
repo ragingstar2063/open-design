@@ -1,11 +1,17 @@
-// Design-system registry. Scans <projectRoot>/design-systems/* for DESIGN.md
-// files. Title comes from the first H1. Category comes from a
-// `> Category: <name>` blockquote line beneath the H1. Summary is the first
-// paragraph between the H1 and the next heading (Category line stripped).
+// Design-system registry. Scans <projectRoot>/design-systems/* for design
+// system projects. Project folders may opt into manifest.json; legacy folders
+// with only DESIGN.md remain valid. Without a manifest, title comes from the
+// first H1, category from a `> Category: <name>` blockquote line beneath the
+// H1, and summary from the first paragraph between the H1 and next heading.
 
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+
+import {
+  extractComponentsManifest,
+  summarizeComponentsManifestForPrompt,
+} from '@open-design/contracts';
 
 export type DesignSystemSurface = 'web' | 'image' | 'video' | 'audio';
 export type DesignSystemSource = 'built-in' | 'installed' | 'user';
@@ -65,6 +71,18 @@ export type DesignSystemRevision = {
 };
 
 type ColorToken = { name: string; value: string };
+type DesignSystemProjectManifest = {
+  schemaVersion: 'od-design-system-project/v1';
+  id: string;
+  name: string;
+  category: string;
+  description?: string;
+  files: {
+    design: 'DESIGN.md';
+    tokens: 'tokens.css';
+    components?: 'components.html';
+  };
+};
 
 export type DesignSystemProvenance = {
   companyBlurb?: string;
@@ -155,20 +173,22 @@ export async function listDesignSystems(
     return out;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const designPath = path.join(root, entry.name, 'DESIGN.md');
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const brandRoot = path.join(root, entry.name);
+    const manifest = await readProjectManifest(brandRoot, entry.name);
+    const designPath = path.join(brandRoot, manifest?.files.design ?? 'DESIGN.md');
     try {
       const stats = await stat(designPath);
       if (!stats.isFile()) continue;
       const raw = await readFile(designPath, 'utf8');
       const metadata = await readUserMetadata(root, entry.name);
       const titleMatch = /^#\s+(.+?)\s*$/m.exec(raw);
-      const title = cleanTitle(metadata.title ?? titleMatch?.[1] ?? entry.name);
+      const title = cleanTitle(metadata.title ?? manifest?.name ?? titleMatch?.[1] ?? entry.name);
       out.push({
         id: `${options.idPrefix ?? ''}${entry.name}`,
         title,
-        category: metadata.category ?? extractCategory(raw) ?? 'Uncategorized',
-        summary: summarize(raw),
+        category: metadata.category ?? manifest?.category ?? extractCategory(raw) ?? 'Uncategorized',
+        summary: manifest?.description?.trim() || summarize(raw),
         swatches: extractSwatches(raw),
         surface: metadata.surface ?? extractSurface(raw),
         body: raw,
@@ -194,7 +214,9 @@ export async function readDesignSystem(
 ): Promise<string | null> {
   const dirId = stripPrefixAndValidateId(id, options.idPrefix);
   if (!dirId) return null;
-  const file = path.join(root, dirId, 'DESIGN.md');
+  const brandRoot = path.join(root, dirId);
+  const manifest = await readProjectManifest(brandRoot, dirId);
+  const file = path.join(brandRoot, manifest?.files.design ?? 'DESIGN.md');
   try {
     return await readFile(file, 'utf8');
   } catch {
@@ -206,11 +228,21 @@ export async function readDesignSystem(
  * Structured (compiled) form of a brand's design system. Optional sibling
  * files alongside DESIGN.md that, when present, give agents a
  * machine-readable token contract and a worked fixture instead of having
- * to re-derive both from prose.
+ * to re-derive both from prose. Both fields are individually optional —
+ * the daemon falls back to the DESIGN.md-only path when neither is
+ * available, which is the current state for the ~138 brands without
+ * hand-authored or derived tokens.
+ *
+ * - `tokensCss`     — verbatim content of `<brand>/tokens.css`.
+ * - `fixtureHtml`   — verbatim content of `<brand>/components.html`.
+ * - `componentsManifest` — concise summary derived from components.html
+ *                          for prompt injection; when absent, callers
+ *                          can fall back to `fixtureHtml`.
  */
 export type DesignSystemAssets = {
   tokensCss?: string | undefined;
   fixtureHtml?: string | undefined;
+  componentsManifest?: string | undefined;
 };
 
 export async function readDesignSystemAssets(
@@ -219,11 +251,15 @@ export async function readDesignSystemAssets(
 ): Promise<DesignSystemAssets> {
   const dirId = stripPrefixAndValidateId(id, id.startsWith('user:') ? 'user:' : '');
   if (!dirId) return {};
+  const brandRoot = path.join(root, dirId);
+  const manifest = await readProjectManifest(brandRoot, dirId);
   const [tokensCss, fixtureHtml] = await Promise.all([
-    readFileOptional(path.join(root, dirId, 'tokens.css')),
-    readFileOptional(path.join(root, dirId, 'components.html')),
+    readFileOptional(path.join(brandRoot, manifest?.files.tokens ?? 'tokens.css')),
+    manifest?.files.components === undefined && manifest !== null
+      ? Promise.resolve(undefined)
+      : readFileOptional(path.join(brandRoot, manifest?.files.components ?? 'components.html')),
   ]);
-  return { tokensCss, fixtureHtml };
+  return withComponentsManifest(id, { tokensCss, fixtureHtml });
 }
 
 export function isDesignTokenChannelEnabled(
@@ -248,10 +284,42 @@ export async function resolveDesignSystemAssets(
   }
 
   const userInstalled = await readDesignSystemAssets(userInstalledRoot, designSystemId);
-  return {
+  return withComponentsManifest(designSystemId, {
     tokensCss: builtIn.tokensCss ?? userInstalled.tokensCss,
     fixtureHtml: builtIn.fixtureHtml ?? userInstalled.fixtureHtml,
-  };
+  });
+}
+
+function withComponentsManifest(
+  designSystemId: string,
+  assets: Pick<DesignSystemAssets, 'tokensCss' | 'fixtureHtml'>,
+): DesignSystemAssets {
+  const componentsManifest = buildComponentsManifestSummary(
+    designSystemId,
+    assets.fixtureHtml,
+    assets.tokensCss,
+  );
+  return { ...assets, componentsManifest };
+}
+
+function buildComponentsManifestSummary(
+  designSystemId: string,
+  fixtureHtml: string | undefined,
+  tokensCss: string | undefined,
+): string | undefined {
+  if (fixtureHtml === undefined || fixtureHtml.trim().length === 0) {
+    return undefined;
+  }
+
+  try {
+    const manifest =
+      tokensCss === undefined
+        ? extractComponentsManifest({ brandId: designSystemId, fixtureHtml })
+        : extractComponentsManifest({ brandId: designSystemId, fixtureHtml, tokensCss });
+    return summarizeComponentsManifestForPrompt(manifest);
+  } catch {
+    return undefined;
+  }
 }
 
 export async function createUserDesignSystem(
@@ -2167,6 +2235,46 @@ function isAbsenceError(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false;
   const code = (err as { code?: unknown }).code;
   return code === 'ENOENT' || code === 'ENOTDIR';
+}
+
+async function readProjectManifest(
+  brandRoot: string,
+  expectedId: string,
+): Promise<DesignSystemProjectManifest | null> {
+  let raw: string | undefined;
+  try {
+    raw = await readFileOptional(path.join(brandRoot, 'manifest.json'));
+  } catch {
+    return null;
+  }
+  if (raw === undefined) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isProjectManifest(parsed, expectedId)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isProjectManifest(value: unknown, expectedId: string): value is DesignSystemProjectManifest {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion !== 'od-design-system-project/v1') return false;
+  if (record.id !== expectedId) return false;
+  if (typeof record.name !== 'string' || record.name.trim().length === 0) return false;
+  if (typeof record.category !== 'string' || record.category.trim().length === 0) return false;
+  if (record.description !== undefined && typeof record.description !== 'string') return false;
+
+  const files = record.files;
+  if (typeof files !== 'object' || files === null || Array.isArray(files)) return false;
+  const fileRecord = files as Record<string, unknown>;
+  return (
+    fileRecord.design === 'DESIGN.md' &&
+    fileRecord.tokens === 'tokens.css' &&
+    (fileRecord.components === undefined || fileRecord.components === 'components.html')
+  );
 }
 
 function summarize(raw: string): string {

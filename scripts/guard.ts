@@ -1,7 +1,10 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
+import { checkDesignSystemManifests } from "./check-design-system-manifests.ts";
+import { checkDesignSystemComponentFixtureReport } from "./check-components-fixtures.ts";
 import { checkDesignSystemFlagParity } from "./check-design-system-flag-parity.ts";
+import { checkComponentsManifestExtraction } from "./check-components-manifest-extraction.ts";
 import {
   checkDesignSystemA1RequiredTokens,
   checkDesignSystemA2DefaultsParity,
@@ -77,6 +80,8 @@ const residualAllowedExactPaths = new Set([
   "tools/pack/esbuild.config.mjs",
   "tools/pr/bin/tools-pr.mjs",
   "tools/pr/esbuild.config.mjs",
+  "tools/serve/bin/tools-serve.mjs",
+  "tools/serve/esbuild.config.mjs",
   "tools/pack/resources/mac/notarize.cjs",
   // electron-builder hook path; CJS compatibility entry used by tools-pack desktop builds.
   "tools/pack/resources/web-standalone-after-pack.cjs",
@@ -390,6 +395,7 @@ const toolsRootAllowlist = new Map<string, "directory" | "file">([
   ["dev", "directory"],
   ["pack", "directory"],
   ["pr", "directory"],
+  ["serve", "directory"],
 ]);
 
 async function checkToolsLayout(): Promise<boolean> {
@@ -403,7 +409,7 @@ async function checkToolsLayout(): Promise<boolean> {
     const repositoryPath = `tools/${entry.name}${entry.isDirectory() ? "/" : ""}`;
 
     if (expected == null) {
-      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, and pr/`);
+      violations.push(`${repositoryPath} -> tools/ top-level entries are allowlisted; expected only AGENTS.md, dev/, pack/, pr/, and serve/`);
       continue;
     }
 
@@ -704,6 +710,8 @@ const checks: GuardCheck[] = [
   { name: "web test layout", run: checkWebTestLayout },
   { name: "tools layout", run: checkToolsLayout },
   { name: "style policy", run: checkStylePolicy },
+  { name: "design system manifests", run: checkDesignSystemManifests },
+  { name: "design system component fixture report", run: checkDesignSystemComponentFixtureReport },
   { name: "design system token-fixture sync", run: checkDesignSystemTokenFixtureSync },
   { name: "design system A1 required tokens", run: checkDesignSystemA1RequiredTokens },
   { name: "design system A2 required tokens", run: checkDesignSystemA2RequiredTokens },
@@ -711,6 +719,7 @@ const checks: GuardCheck[] = [
   { name: "design system unknown token allowlist", run: checkDesignSystemUnknownTokens },
   { name: "design system A2 defaults parity", run: checkDesignSystemA2DefaultsParity },
   { name: "design system flag parity", run: checkDesignSystemFlagParity },
+  { name: "design system component manifest extraction", run: checkComponentsManifestExtraction },
 ];
 
 const results: boolean[] = [];

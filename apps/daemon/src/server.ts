@@ -4,7 +4,7 @@ import express from 'express';
 import multer from 'multer';
 import JSZip from 'jszip';
 import { execFile, spawn } from 'node:child_process';
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -37,6 +37,25 @@ import {
   spawnEnvForAgent,
 } from './agents.js';
 import { migrateLegacyDataDirSync } from './legacy-data-migrator.js';
+import {
+  consumedImportNonces,
+  getDesktopAuthSecret,
+  isDesktopAuthGateActive,
+  isDesktopAuthRegistered,
+  pruneExpiredImportNonces,
+  resetDesktopAuthForTests,
+  setDesktopAuthSecret,
+  signDesktopImportToken,
+  verifyDesktopImportToken,
+} from './desktop-auth.js';
+export {
+  isDesktopAuthGateActive,
+  isDesktopAuthRegistered,
+  resetDesktopAuthForTests,
+  setDesktopAuthSecret,
+  signDesktopImportToken,
+  verifyDesktopImportToken,
+} from './desktop-auth.js';
 import { findSkillById, listSkills, splitDerivedSkillId } from './skills.js';
 import { validateLinkedDirs } from './linked-dirs.js';
 import { installFromTarget, uninstallById, sanitizeRepoName } from './library-install.js';
@@ -160,9 +179,11 @@ import {
 import { listProviderModels } from './providerModels.js';
 import { importClaudeDesignZip } from './claude-design-import.js';
 import {
+  defaultBaseUrlForFinalizeProtocol,
   finalizeDesignPackage,
   FinalizePackageLockedError,
   FinalizeUpstreamError,
+  isFinalizeProviderProtocol,
 } from './finalize-design.js';
 import { listPromptTemplates, readPromptTemplate } from './prompt-templates.js';
 import { buildDocumentPreview } from './document-preview.js';
@@ -248,6 +269,7 @@ import {
 import { validateArtifactManifestInput } from './artifact-manifest.js';
 import { readCurrentAppVersionInfo } from './app-version.js';
 import {
+  appendMessageStatusEvent,
   deleteConversation,
   deletePreviewComment,
   deleteProject as dbDeleteProject,
@@ -307,6 +329,7 @@ import { LiveArtifactRefreshAbortError } from './live-artifacts/refresh.js';
 import { registerConnectorRoutes } from './connectors/routes.js';
 import { registerActiveContextRoutes } from './active-context-routes.js';
 import { registerMcpRoutes } from './mcp-routes.js';
+import { registerXaiRoutes } from './xai-routes.js';
 import { registerLiveArtifactRoutes } from './live-artifact-routes.js';
 import { registerDeployRoutes, registerDeploymentCheckRoutes } from './deploy-routes.js';
 import { registerMediaRoutes } from './media-routes.js';
@@ -381,101 +404,6 @@ export function resolveDaemonCliPath(env: NodeJS.ProcessEnv = process.env): stri
 
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
 const RESOURCE_ROOT_ENV = 'OD_RESOURCE_ROOT';
-let desktopAuthSecret: Buffer | null = null;
-let desktopAuthEverRegistered = process.env.OD_REQUIRE_DESKTOP_AUTH === '1';
-const consumedImportNonces = new Map<string, number>();
-const DESKTOP_IMPORT_TOKEN_TTL_MS = 60_000;
-const DESKTOP_IMPORT_TOKEN_FIELD_SEP = '~';
-
-export function setDesktopAuthSecret(secret: Buffer | null): void {
-  desktopAuthSecret = secret;
-  if (secret != null) {
-    desktopAuthEverRegistered = true;
-  }
-  consumedImportNonces.clear();
-}
-
-export function isDesktopAuthRegistered(): boolean {
-  return desktopAuthSecret != null;
-}
-
-export function isDesktopAuthGateActive(): boolean {
-  return desktopAuthEverRegistered;
-}
-
-export function resetDesktopAuthForTests(): void {
-  desktopAuthSecret = null;
-  desktopAuthEverRegistered = process.env.OD_REQUIRE_DESKTOP_AUTH === '1';
-  consumedImportNonces.clear();
-}
-
-function pruneExpiredImportNonces(now: number): void {
-  for (const [nonce, exp] of consumedImportNonces) {
-    if (exp <= now) consumedImportNonces.delete(nonce);
-  }
-}
-
-function timingSafeStringEquals(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, 'utf8');
-  const bufB = Buffer.from(b, 'utf8');
-  if (bufA.length !== bufB.length) return false;
-  return timingSafeEqual(bufA, bufB);
-}
-
-export function signDesktopImportToken(
-  secret: Buffer,
-  baseDir: string,
-  options: { nonce: string; exp: string },
-): string {
-  const signature = createHmac('sha256', secret)
-    .update(`${baseDir}\n${options.nonce}\n${options.exp}`)
-    .digest('base64url');
-  return [options.nonce, options.exp, signature].join(DESKTOP_IMPORT_TOKEN_FIELD_SEP);
-}
-
-type DesktopImportTokenVerification =
-  | { ok: true; nonce: string; exp: number }
-  | { ok: false; reason: string };
-
-export function verifyDesktopImportToken(
-  secret: Buffer,
-  baseDir: string,
-  token: string,
-  now: number,
-  consumedNonces: Map<string, number>,
-): DesktopImportTokenVerification {
-  if (typeof token !== 'string' || token.length === 0) {
-    return { ok: false, reason: 'token missing' };
-  }
-  const parts = token.split(DESKTOP_IMPORT_TOKEN_FIELD_SEP);
-  if (parts.length !== 3) {
-    return { ok: false, reason: 'token shape invalid' };
-  }
-  const [nonce, expISO, signature] = parts;
-  if (nonce.length === 0 || expISO.length === 0 || signature.length === 0) {
-    return { ok: false, reason: 'token shape invalid' };
-  }
-  const expMs = Date.parse(expISO);
-  if (!Number.isFinite(expMs)) {
-    return { ok: false, reason: 'token expiry invalid' };
-  }
-  if (expMs <= now) {
-    return { ok: false, reason: 'token expired' };
-  }
-  if (expMs - now > DESKTOP_IMPORT_TOKEN_TTL_MS * 2) {
-    return { ok: false, reason: 'token expiry exceeds permitted window' };
-  }
-  const expected = createHmac('sha256', secret)
-    .update(`${baseDir}\n${nonce}\n${expISO}`)
-    .digest('base64url');
-  if (!timingSafeStringEquals(expected, signature)) {
-    return { ok: false, reason: 'token signature invalid' };
-  }
-  if (consumedNonces.has(nonce)) {
-    return { ok: false, reason: 'token nonce already used' };
-  }
-  return { ok: true, nonce, exp: expMs };
-}
 
 export function composeLiveInstructionPrompt({
   daemonSystemPrompt,
@@ -933,6 +861,32 @@ function isPathWithin(base, target) {
       !relativePath.startsWith('..') &&
       !path.isAbsolute(relativePath))
   );
+}
+
+export function resolveSafeProjectAttachments(cwd, attachments, opts = {}) {
+  if (!cwd || !Array.isArray(attachments)) return [];
+  const pathImpl = opts.pathImpl ?? path;
+  const existsSync = opts.existsSync ?? fs.existsSync;
+  const root = pathImpl.resolve(cwd);
+  const out = [];
+
+  for (const attachment of attachments) {
+    if (typeof attachment !== 'string' || attachment.length === 0) continue;
+    try {
+      const abs = pathImpl.resolve(root, attachment);
+      const relativePath = pathImpl.relative(root, abs);
+      const withinRoot =
+        relativePath === '' ||
+        (relativePath.length > 0 &&
+          !relativePath.startsWith('..') &&
+          !pathImpl.isAbsolute(relativePath));
+      if (withinRoot && existsSync(abs)) out.push(attachment);
+    } catch {
+      // Drop malformed paths; attachments are advisory prompt context.
+    }
+  }
+
+  return out;
 }
 
 function resolveProcessResourcesPath() {
@@ -1396,6 +1350,7 @@ export function createAgentRuntimeEnv(
 ): NodeJS.ProcessEnv {
   const env = {
     ...baseEnv,
+    OD_DATA_DIR: RUNTIME_DATA_DIR,
     OD_DAEMON_URL: daemonUrl,
     OD_NODE_BIN: nodeBin,
   };
@@ -2927,6 +2882,7 @@ export async function startServer({
         completedAt: run.completedAt,
         summary: run.summary,
         error: run.error,
+        errorCode: run.errorCode,
       });
     },
     updateRun: (id, patch) => {
@@ -3863,7 +3819,7 @@ export async function startServer({
   const authDeps = {
     authorizeToolRequest,
     consumedImportNonces,
-    desktopAuthSecret: () => desktopAuthSecret,
+    desktopAuthSecret: getDesktopAuthSecret,
     isDesktopAuthGateActive,
     pruneExpiredImportNonces,
     requestProjectOverride,
@@ -3871,9 +3827,11 @@ export async function startServer({
     verifyDesktopImportToken,
   };
   const finalizeDeps = {
+    defaultBaseUrlForFinalizeProtocol,
     finalizeDesignPackage,
     FinalizePackageLockedError,
     FinalizeUpstreamError,
+    isFinalizeProviderProtocol,
     redactSecrets,
   };
   const validationDeps = { isSafeId, validateExternalApiBaseUrl, validateBaseUrl, validateProjectDesignSystemId };
@@ -3898,6 +3856,10 @@ export async function startServer({
     http: httpDeps,
     paths: pathDeps,
     mcp: { pendingAuth: mcpPendingAuth, daemonUrlRef },
+  });
+  registerXaiRoutes(app, {
+    http: httpDeps,
+    paths: pathDeps,
   });
   // Project workspace
   registerActiveContextRoutes(app, {
@@ -8113,7 +8075,8 @@ export async function startServer({
 
     let designSystemBody;
     let designSystemTitle;
-    // Compiled (tokens.css + components.html) form of the active brand.
+    // Compiled (tokens.css + components manifest / components.html)
+    // form of the active brand.
     // Default-on as of PR-D — every chat that picks a brand with
     // `tokens.css` + `components.html` siblings (today: `default` and
     // `kami`; every other brand falls through silently because the
@@ -8126,6 +8089,7 @@ export async function startServer({
     // `true`, etc.) keeps the new default. Drift on prose-only brands
     // is pinned by `scripts/check-design-system-flag-parity.ts`.
     let designSystemTokensCss;
+    let designSystemComponentsManifest;
     let designSystemFixtureHtml;
     if (effectiveDesignSystemId) {
       let systems = await listAllDesignSystems();
@@ -8153,6 +8117,7 @@ export async function startServer({
           USER_DESIGN_SYSTEMS_DIR,
         );
         designSystemTokensCss = assets.tokensCss;
+        designSystemComponentsManifest = assets.componentsManifest;
         designSystemFixtureHtml = assets.fixtureHtml;
       }
     }
@@ -8309,6 +8274,7 @@ export async function startServer({
       designSystemBody,
       designSystemTitle,
       designSystemTokensCss,
+      designSystemComponentsManifest,
       designSystemFixtureHtml,
       craftBody,
       craftSections,
@@ -8534,19 +8500,7 @@ export async function startServer({
     // explicit list at the bottom of the user message so the agent knows
     // to Read it.
     const safeAttachments = cwd
-      ? (Array.isArray(attachments) ? attachments : [])
-          .filter((p) => typeof p === 'string' && p.length > 0)
-          .filter((p) => {
-            try {
-              const abs = path.resolve(cwd, p);
-              return (
-                (abs === cwd || abs.startsWith(cwd + path.sep)) &&
-                fs.existsSync(abs)
-              );
-            } catch {
-              return false;
-            }
-          })
+      ? resolveSafeProjectAttachments(cwd, attachments)
       : [];
 
     // Local code agents don't accept a separate "system" channel the way the
@@ -10246,11 +10200,27 @@ export async function startServer({
 
     const completion = (async () => {
       const finalStatus = await design.runs.wait(run);
+      const failureError = finalStatus.status === 'failed'
+        ? (typeof finalStatus.error === 'string' && finalStatus.error.trim() ? finalStatus.error.trim() : null)
+        : null;
+      const failureErrorCode = finalStatus.status === 'failed'
+        ? (typeof finalStatus.errorCode === 'string' && finalStatus.errorCode.trim() ? finalStatus.errorCode.trim() : null)
+        : null;
+      if (failureError) {
+        appendMessageStatusEvent(db, assistantMessageId, {
+          label: 'error',
+          detail: failureError,
+        });
+      }
       db.prepare(`UPDATE messages SET run_status = ?, ended_at = ? WHERE id = ?`)
         .run(finalStatus.status, Date.now(), assistantMessageId);
       return {
         status: finalStatus.status,
-        summary: `Routine "${routine.name}" ${finalStatus.status}.`,
+        summary: failureError
+          ? `Routine "${routine.name}" failed: ${failureError}`
+          : `Routine "${routine.name}" ${finalStatus.status}.`,
+        error: failureError ?? undefined,
+        errorCode: failureErrorCode ?? undefined,
       };
     })();
 
