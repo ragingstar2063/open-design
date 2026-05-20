@@ -28,7 +28,14 @@ const AVAILABLE_MODELS = [
   { modelId: 'anthropic/claude-3.7-sonnet', name: 'claude-3.7-sonnet' },
 ];
 
-let currentModelId = 'openai/gpt-5.4-mini';
+// Real `vela agent run --runtime opencode` rejects session/prompt until
+// session/set_model has been called for the current session — see the
+// AMR runtime def docblock and the integration test for the negative case.
+// The stub mirrors that contract so a regression in attachAcpSession that
+// silently skips set_model for AMR turns is caught here, not in production.
+let currentModelId = null;
+const sessionsWithModel = new Set();
+const STRICT_SET_MODEL = process.env.FAKE_VELA_REQUIRE_SET_MODEL !== '0';
 
 function writeMessage(obj) {
   stdout.write(`${JSON.stringify(obj)}\n`);
@@ -93,15 +100,34 @@ function handleMessage(msg) {
       return;
     case 'session/set_model': {
       const next = typeof params?.modelId === 'string' ? params.modelId.trim() : '';
+      const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : SESSION_ID;
       if (next) currentModelId = next;
+      sessionsWithModel.add(sessionId);
       writeResult(id, {});
       return;
     }
-    case 'session/set_config_option':
+    case 'session/set_config_option': {
+      const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : SESSION_ID;
+      // Treat config-option model selection as set_model for the purposes of
+      // the strict-set_model gate so adapters that go through the
+      // configOptions branch are not penalized.
+      sessionsWithModel.add(sessionId);
       writeResult(id, {});
       return;
+    }
     case 'session/prompt': {
       const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : SESSION_ID;
+      if (STRICT_SET_MODEL && !sessionsWithModel.has(sessionId)) {
+        writeMessage({
+          jsonrpc: '2.0',
+          id,
+          error: {
+            code: -32602,
+            message: 'session/set_model must be called before session/prompt',
+          },
+        });
+        return;
+      }
       emitSessionUpdates(sessionId);
       writeResult(id, {
         stopReason: 'end_turn',

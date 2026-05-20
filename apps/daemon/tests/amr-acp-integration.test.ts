@@ -11,6 +11,8 @@
  * data record, so this test also pins the contract the def declares:
  *   - id, bin, streamFormat are stable for downstream consumers
  *   - buildArgs() emits the vela invocation shape the docs describe
+ *   - fallback model ids match what opencode's openai provider knows about,
+ *     because real vela auto-prepends `openai/` and rejects unknown ids.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -50,7 +52,7 @@ describe('AMR runtime def', () => {
   });
 
   it('builds the documented `vela agent run --runtime opencode` argv', () => {
-    expect(amrAgentDef.buildArgs('', [])).toEqual([
+    expect(amrAgentDef.buildArgs()).toEqual([
       'agent',
       'run',
       '--runtime',
@@ -58,15 +60,29 @@ describe('AMR runtime def', () => {
     ]);
   });
 
-  it('declares OpenRouter-flavored fallback models including the vela baseline', () => {
+  it('uses a concrete vela-compatible model as the default, never the synthetic "default" id', () => {
+    // Real vela rejects session/prompt without a prior session/set_model,
+    // and attachAcpSession skips set_model whenever model === 'default'.
+    // So AMR's fallback list must NOT contain the synthetic 'default'.
     const ids = amrAgentDef.fallbackModels.map((m) => m.id);
-    expect(ids).toContain('default');
-    expect(ids).toContain('openai/gpt-5.4-mini');
+    expect(ids).not.toContain('default');
+    expect(ids[0]).toBe('gpt-5.4-mini');
+  });
+
+  it('uses bare openai model ids so vela can auto-prepend the provider without doubling it', () => {
+    // vela's `--runtime opencode` mode prepends `openai/` to every modelId
+    // before forwarding to opencode. If our fallback list said
+    // `openai/gpt-5.4-mini`, opencode would receive `openai/openai/...` and
+    // report `ProviderModelNotFoundError`.
+    for (const model of amrAgentDef.fallbackModels) {
+      expect(model.id.startsWith('openai/')).toBe(false);
+      expect(model.id.includes('/')).toBe(false);
+    }
   });
 });
 
 describe('AMR ACP transport — end-to-end against fake vela stub', () => {
-  it('drives a complete turn: initialize → session/new → session/prompt', async () => {
+  it('drives a complete turn: initialize → session/new → session/set_model → session/prompt', async () => {
     const child = spawnFakeVela({
       FAKE_VELA_TEXT: 'Hello from AMR.',
       FAKE_VELA_THOUGHT: 'thinking-chunk',
@@ -77,7 +93,10 @@ describe('AMR ACP transport — end-to-end against fake vela stub', () => {
         child: child as never,
         prompt: 'Say hello',
         cwd: process.cwd(),
-        model: null,
+        // Pass a real model id so attachAcpSession sends session/set_model
+        // before session/prompt, matching the real vela contract the AMR
+        // runtime def encodes.
+        model: 'gpt-5.4-mini',
         mcpServers: [],
         send: (event, payload) => {
           events.push({ event, payload });
@@ -112,16 +131,48 @@ describe('AMR ACP transport — end-to-end against fake vela stub', () => {
     expect(thinkingDeltas.join('')).toBe('thinking-chunk');
   });
 
+  it('regression: stub mirrors real vela by rejecting session/prompt before session/set_model', async () => {
+    const child = spawnFakeVela({ FAKE_VELA_TEXT: 'unused' });
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        // model === 'default' triggers the daemon to skip session/set_model.
+        // Against a vela-faithful stub that should surface as a fatal error,
+        // not a silent success — otherwise this same call path would also
+        // silently fail against a real vela in production.
+        model: 'default',
+        mcpServers: [],
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      expect(session.hasFatalError()).toBe(true);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    expect(errors.length).toBeGreaterThan(0);
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message.toLowerCase()).toContain('session/set_model');
+  });
+
   it('detectAcpModels surfaces availableModels from the vela ACP session/new response', async () => {
     const result = await detectAcpModels({
       bin: process.execPath,
       args: [FAKE_VELA],
       env: process.env,
       timeoutMs: 10_000,
-      defaultModelOption: { id: 'default', label: 'Default (CLI config)' },
+      defaultModelOption: { id: 'gpt-5.4-mini', label: 'gpt-5.4-mini (default)' },
     });
     const ids = (result || []).map((m) => m.id);
-    expect(ids).toContain('default');
+    expect(ids).toContain('gpt-5.4-mini');
     expect(ids).toContain('openai/gpt-5.4-mini');
     expect(ids).toContain('anthropic/claude-3.7-sonnet');
   });
