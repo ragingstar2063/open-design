@@ -626,6 +626,26 @@ export interface Dict {
   'notify.successBody': string;
   'notify.failureBody': string;
 
+  // Desktop updater
+  'updater.available': string;
+  'updater.downloading': string;
+  'updater.downloadingPercent': string;
+  'updater.done': string;
+  'updater.failed': string;
+  'updater.installerOpenBody': string;
+  'updater.installerOpened': string;
+  'updater.later': string;
+  'updater.openFailedFallback': string;
+  'updater.openInstaller': string;
+  'updater.opening': string;
+  'updater.quitButton': string;
+  'updater.quitFailedBody': string;
+  'updater.quitFailedTitle': string;
+  'updater.quitting': string;
+  'updater.ready': string;
+  'updater.readyGeneric': string;
+  'updater.readyVersion': string;
+
   // Entry view / tabs
   'entry.tabDesigns': string;
   'entry.tabTemplates': string;
