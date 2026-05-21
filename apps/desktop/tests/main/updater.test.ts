@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { readdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -82,6 +82,8 @@ function channelMetadata(channel: FixtureChannel, version: string): Record<strin
 async function createUpdaterFixture(options: {
   artifactBody?: string;
   channel?: FixtureChannel;
+  failArtifactAttempts?: number;
+  failFirstArtifactWithTerminated?: boolean;
   platform?: FixturePlatform;
   version?: string;
 } = {}): Promise<FixtureServer> {
@@ -129,6 +131,12 @@ async function createUpdaterFixture(options: {
     if (url === artifactPath) {
       artifactRequests += 1;
       response.setHeader("content-length", String(Buffer.byteLength(artifactBody)));
+      const failArtifactAttempts = options.failArtifactAttempts ?? (options.failFirstArtifactWithTerminated === true ? 1 : 0);
+      if (artifactRequests <= failArtifactAttempts) {
+        response.write(artifactBody.slice(0, Math.max(1, Math.floor(artifactBody.length / 2))));
+        response.destroy(new Error("terminated"));
+        return;
+      }
       response.end(artifactBody);
       return;
     }
@@ -290,6 +298,68 @@ describe("desktop updater", () => {
       expect(installed.state).toBe(DESKTOP_UPDATE_STATES.DOWNLOADED);
       expect(installed.installResult?.dryRun).toBe(true);
       expect(installed.installResult?.path).toBe(checked.downloadPath);
+    } finally {
+      await fixture.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries an interrupted artifact download before surfacing an error", async () => {
+    const root = makeRoot();
+    const fixture = await createUpdaterFixture({
+      artifactBody: "open design updater fixture with retry",
+      failFirstArtifactWithTerminated: true,
+      platform: "win",
+    });
+    const logger = { error: vi.fn(), warn: vi.fn() };
+    try {
+      const updater = createDesktopUpdater(
+        {
+          arch: "x64",
+          downloadRoot: root,
+          env: updaterEnv(fixture.metadataUrl, "win32"),
+          source: SIDECAR_SOURCES.TOOLS_PACK,
+        },
+        { logger },
+      );
+
+      const checked = await updater.checkForUpdates();
+
+      expect(checked.state).toBe(DESKTOP_UPDATE_STATES.DOWNLOADED);
+      expect(checked.error).toBeUndefined();
+      expect(fixture.artifactRequests()).toBe(2);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "[open-design updater] retrying interrupted update download",
+        expect.objectContaining({ error: expect.stringMatching(/terminated|fetch failed/i) }),
+      );
+    } finally {
+      await fixture.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("does not expose raw terminated transport errors when update download retries are exhausted", async () => {
+    const root = makeRoot();
+    const fixture = await createUpdaterFixture({
+      artifactBody: "open design updater fixture that keeps failing",
+      failArtifactAttempts: 3,
+      platform: "win",
+    });
+    try {
+      const updater = createDesktopUpdater({
+        arch: "x64",
+        downloadRoot: root,
+        env: updaterEnv(fixture.metadataUrl, "win32"),
+        source: SIDECAR_SOURCES.TOOLS_PACK,
+      });
+
+      const checked = await updater.checkForUpdates();
+
+      expect(checked.state).toBe(DESKTOP_UPDATE_STATES.ERROR);
+      expect(checked.error?.code).toBe("download-failed");
+      expect(checked.error?.message).toBe("The network connection ended while downloading the update. Please try again.");
+      expect(checked.error?.message).not.toMatch(/terminated/i);
+      expect(fixture.artifactRequests()).toBe(3);
     } finally {
       await fixture.close();
       rmSync(root, { force: true, recursive: true });
@@ -928,6 +998,65 @@ describe("desktop updater", () => {
       expect(checked.state).toBe(DESKTOP_UPDATE_STATES.DOWNLOADED);
       expect(checked.installResult?.path).toBe(downloaded.downloadPath);
       expect(fixture.metadataRequests()).toBe(metadataRequestsBeforeRestart);
+    } finally {
+      await fixture.close();
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("clears interrupted incoming downloads on cold start instead of surfacing a store error", async () => {
+    const root = makeRoot();
+    const fixture = await createUpdaterFixture({ platform: "win" });
+    try {
+      const updater = createDesktopUpdater({
+        arch: "x64",
+        downloadRoot: root,
+        env: {
+          ...updaterEnv(fixture.metadataUrl, "win32"),
+          [DESKTOP_UPDATE_ENV.AUTO_DOWNLOAD]: "0",
+        },
+        source: SIDECAR_SOURCES.TOOLS_PACK,
+      });
+      await updater.status();
+      const cycleId = "interrupted-cycle";
+      const stagingDir = join(root, "staging", cycleId);
+      await mkdir(stagingDir, { recursive: true });
+      await writeFile(join(stagingDir, "partial.exe"), "partial", "utf8");
+      await writeFile(join(root, "metadata.json"), JSON.stringify({
+        incoming: {
+          arch: "x64",
+          artifact: {
+            name: "open-design-1.0.1-win-x64-setup.exe",
+            platformKey: "win",
+            type: "installer",
+            url: "https://fixture.test/open-design-1.0.1-win-x64-setup.exe",
+          },
+          channel: "stable",
+          cycleId,
+          metadata: {},
+          platformKey: "win",
+          startedAt: "2026-05-21T00:00:00.000Z",
+          version: "1.0.1",
+        },
+        version: 1,
+      }), "utf8");
+
+      const restarted = createDesktopUpdater({
+        arch: "x64",
+        downloadRoot: root,
+        env: {
+          ...updaterEnv(fixture.metadataUrl, "win32"),
+          [DESKTOP_UPDATE_ENV.AUTO_DOWNLOAD]: "0",
+        },
+        source: SIDECAR_SOURCES.TOOLS_PACK,
+      });
+      const status = await restarted.status();
+      const metadata = JSON.parse(await readFile(join(root, "metadata.json"), "utf8")) as Record<string, unknown>;
+
+      expect(status.state).toBe(DESKTOP_UPDATE_STATES.IDLE);
+      expect(status.error).toBeUndefined();
+      expect(metadata.incoming).toBeUndefined();
+      expect(existsSync(stagingDir)).toBe(false);
     } finally {
       await fixture.close();
       rmSync(root, { force: true, recursive: true });

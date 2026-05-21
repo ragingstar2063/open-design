@@ -890,6 +890,23 @@ export type WindowFullscreenSurface = {
   once: (event: 'enter-full-screen' | 'leave-full-screen', listener: () => void) => unknown;
 };
 
+export type MainWindowCloseSurface = {
+  on: (event: 'closed', listener: () => void) => unknown;
+};
+
+export function attachNonDarwinMainWindowCloseShutdown(
+  window: MainWindowCloseSurface,
+  options: {
+    isStopped: () => boolean;
+    requestQuit?: () => void;
+  },
+): void {
+  window.on("closed", () => {
+    if (options.isStopped()) return;
+    options.requestQuit?.();
+  });
+}
+
 /**
  * Hide the window, first leaving any active fullscreen so macOS doesn't
  * orphan the fullscreen Space as a black screen. The hide is deferred
@@ -1369,6 +1386,11 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
             ? window.once('enter-full-screen', listener)
             : window.once('leave-full-screen', listener),
       });
+    });
+  } else {
+    attachNonDarwinMainWindowCloseShutdown(window, {
+      isStopped: () => stopped,
+      requestQuit: options.requestQuit,
     });
   }
 

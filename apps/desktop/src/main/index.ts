@@ -109,6 +109,7 @@ export type DesktopMainOptions = {
    */
   discoverDaemonUrl?: () => Promise<string | null>;
   preloadPath?: string;
+  onDesktopReady?: (controls: { show(): void }) => void;
   update?: {
     currentVersion?: string | null;
     downloadRoot?: string | null;
@@ -415,6 +416,7 @@ export async function runDesktopMain(
     requestQuit: shutdownAndExit,
     updater,
   });
+  options.onDesktopReady?.({ show: () => desktop?.show() });
   disposeMenu = installDesktopMenu(runtime);
   removeDiagnosticsIpc = registerDesktopDiagnosticsIpc(runtime);
   updateScheduler = createDesktopUpdaterScheduler(updater, {

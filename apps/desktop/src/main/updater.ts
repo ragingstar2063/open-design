@@ -77,6 +77,7 @@ const DEFAULT_POLL_BACKOFF_INITIAL_MS = 60 * 1000;
 const DEFAULT_POLL_BACKOFF_MAX_MS = 30 * 60 * 1000;
 const MAC_DEFERRED_INSTALLER_TIMEOUT_MS = 10 * 60 * 1000;
 const WINDOWS_DEFERRED_INSTALLER_TIMEOUT_MS = 10 * 60 * 1000;
+const ARTIFACT_DOWNLOAD_MAX_ATTEMPTS = 3;
 const DESKTOP_UPDATE_CHANNEL_VALUES = new Set<string>(Object.values(DESKTOP_UPDATE_CHANNELS));
 
 export type DesktopUpdaterConfigInput = {
@@ -938,6 +939,50 @@ async function downloadToFile(
   );
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isRetryableArtifactDownloadError(error: unknown): boolean {
+  const message = errorMessage(error);
+  return /\b(?:terminated|aborted|ECONNRESET|ETIMEDOUT|EPIPE|UND_ERR_SOCKET|fetch failed)\b/i.test(message);
+}
+
+function userFacingDownloadErrorMessage(error: unknown): string {
+  const message = errorMessage(error);
+  if (isRetryableArtifactDownloadError(error)) {
+    return `The network connection ended while downloading the update. Please try again.`;
+  }
+  return message;
+}
+
+async function downloadToFileWithRetries(
+  fetchImpl: typeof globalThis.fetch,
+  url: string,
+  path: string,
+  onProgress: (progress: DesktopUpdateProgressSnapshot) => void,
+  logger: DesktopUpdaterLogger,
+): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) await rm(path, { force: true }).catch(() => undefined);
+    try {
+      await downloadToFile(fetchImpl, url, path, onProgress);
+      return;
+    } catch (downloadError) {
+      lastError = downloadError;
+      if (attempt >= ARTIFACT_DOWNLOAD_MAX_ATTEMPTS || !isRetryableArtifactDownloadError(downloadError)) break;
+      logger.warn("[open-design updater] retrying interrupted update download", {
+        attempt,
+        error: errorMessage(downloadError),
+        maxAttempts: ARTIFACT_DOWNLOAD_MAX_ATTEMPTS,
+        url,
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function ensureOwnedSubdir(root: string, name: string): Promise<string> {
   if (name.length === 0 || name.includes("\0") || /[\\/]/.test(name)) {
     throw new Error(`update subdirectory must be a simple path segment: ${name}`);
@@ -1226,6 +1271,37 @@ async function writeStoreMetadata(root: OwnedRoot & { ok: true }, metadata: Upda
   await writeJson(root.metadataPath, metadata);
 }
 
+async function clearInterruptedIncomingDownload(
+  root: OwnedRoot & { ok: true },
+  metadata: UpdateStoreMetadata,
+  logger: DesktopUpdaterLogger,
+): Promise<UpdateStoreMetadata> {
+  const incoming = metadata.incoming;
+  if (incoming == null) return metadata;
+  const stagingRoot = resolve(root.realRoot, STAGING_DIR);
+  const stagingDir = resolve(stagingRoot, incoming.cycleId);
+  if (containsPath(stagingRoot, stagingDir)) {
+    await rm(stagingDir, { force: true, recursive: true }).catch((error: unknown) => {
+      logger.warn("[open-design updater] failed to clean interrupted update staging directory", error);
+    });
+  } else {
+    logger.warn("[open-design updater] skipped escaped interrupted update staging directory", {
+      cycleId: incoming.cycleId,
+      stagingDir,
+    });
+  }
+  const next = {
+    ...metadata,
+    incoming: undefined,
+  };
+  await writeStoreMetadata(root, next);
+  logger.warn("[open-design updater] cleared interrupted update download", {
+    cycleId: incoming.cycleId,
+    version: incoming.version,
+  });
+  return next;
+}
+
 function releaseSnapshot(active: LoadedRelease): DesktopUpdateStatusSnapshot["active"] {
   const ref = active.ref;
   return {
@@ -1400,19 +1476,13 @@ export function createDesktopUpdater(
   async function restoreStoreState(): Promise<DesktopUpdateStatusSnapshot | null> {
     const opened = await openStore();
     if (!opened.ok) return opened.status;
-    if (opened.metadata.incoming != null) {
-      const storeError = storeShapeError(opened.root.realRoot, "update store has an interrupted incoming transaction", {
-        incoming: opened.metadata.incoming,
-      });
-      logStoreError(logger, storeError);
-      return setState(DESKTOP_UPDATE_STATES.ERROR, storeError);
-    }
-    const loadedActive = await loadActiveRelease(opened.root, opened.metadata, config, logger);
+    const restoredMetadata = await clearInterruptedIncomingDownload(opened.root, opened.metadata, logger);
+    const loadedActive = await loadActiveRelease(opened.root, restoredMetadata, config, logger);
     if (!loadedActive.ok) return setState(DESKTOP_UPDATE_STATES.ERROR, loadedActive.error);
     activeRelease = loadedActive.active;
-    installFrozen = opened.metadata.installFrozen === true;
-    installResult = opened.metadata.installResult;
-    lastCheckedAt = opened.metadata.lastCheckedAt;
+    installFrozen = restoredMetadata.installFrozen === true;
+    installResult = restoredMetadata.installResult;
+    lastCheckedAt = restoredMetadata.lastCheckedAt;
     metadata = activeRelease?.ref.metadata ?? null;
     candidate = null;
     incomingRelease = null;
@@ -1539,10 +1609,10 @@ export function createDesktopUpdater(
         return await failDownload(createError("download-path-escaped", "resolved update download path escaped update root"));
       }
       const resolvedChecksum = await resolveChecksum(fetchImpl, nextCandidate.checksum);
-      await downloadToFile(fetchImpl, nextCandidate.artifact.url, tmpPath, (nextProgress) => {
+      await downloadToFileWithRetries(fetchImpl, nextCandidate.artifact.url, tmpPath, (nextProgress) => {
         progress = nextProgress;
         emit();
-      });
+      }, logger);
       const digest = await hashFile(tmpPath, resolvedChecksum.algorithm);
       if (resolvedChecksum.value == null || digest.toLowerCase() !== resolvedChecksum.value.toLowerCase()) {
         return await failDownload(
@@ -1600,7 +1670,7 @@ export function createDesktopUpdater(
       await writeMetadataPatch((current) => ({ ...current, incoming: undefined }));
       return setState(
         DESKTOP_UPDATE_STATES.ERROR,
-        createError("download-failed", downloadError instanceof Error ? downloadError.message : String(downloadError)),
+        createError("download-failed", userFacingDownloadErrorMessage(downloadError)),
       );
     }
   }
