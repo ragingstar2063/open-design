@@ -1630,45 +1630,74 @@ process.stdin.on('end', () => {
   });
 
   it('falls back to PATH Codex during connection tests when a configured CODEX_BIN fails', async () => {
-    await withFakeCodex(
-      `console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }));\n`,
-      async () => {
-        const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-codex-fallback-'));
-        try {
-          const bin = path.join(dir, 'codex-bad');
-          await fsp.writeFile(
-            bin,
-            `#!/usr/bin/env node\nconsole.error('macOS blocked this Codex binary');\nprocess.exit(1);\n`,
-          );
-          await fsp.chmod(bin, 0o755);
+    if (process.platform === 'win32') return;
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-codex-fallback-'));
+    const badRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-codex-bad-'));
+    const oldPath = process.env.PATH;
+    try {
+      const bin = path.join(badRoot, 'codex-bad');
+      const wrapperPkgDir = path.join(root, 'node_modules', '@openai', 'codex');
+      const wrapperRealPath = path.join(wrapperPkgDir, 'bin', 'codex.js');
+      const wrapperLinkDir = path.join(root, 'node_modules', '.bin');
+      const wrapperLinkPath = path.join(wrapperLinkDir, 'codex');
+      const nativeBin = path.join(
+        root,
+        'node_modules',
+        '@openai',
+        `codex-${process.platform}-${process.arch}`,
+        'vendor',
+        codexNativeTargetTripleForTest(),
+        'codex',
+        'codex',
+      );
+      await fsp.mkdir(path.dirname(wrapperRealPath), { recursive: true });
+      await fsp.mkdir(wrapperLinkDir, { recursive: true });
+      await fsp.mkdir(path.dirname(nativeBin), { recursive: true });
+      await fsp.writeFile(
+        bin,
+        `#!/usr/bin/env node\nconsole.error('macOS blocked this Codex binary');\nprocess.exit(1);\n`,
+      );
+      await fsp.writeFile(wrapperRealPath, '#!/usr/bin/env node\nrequire("@openai/codex");\n');
+      await fsp.writeFile(
+        nativeBin,
+        `#!/usr/bin/env node
+console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }));
+setImmediate(() => process.exit(0));
+`,
+      );
+      await fsp.chmod(bin, 0o755);
+      await fsp.chmod(wrapperRealPath, 0o755);
+      await fsp.chmod(nativeBin, 0o755);
+      await fsp.symlink(wrapperRealPath, wrapperLinkPath);
+      process.env.PATH = `${wrapperLinkDir}${path.delimiter}${oldPath ?? ''}`;
 
-          const result = await testAgentConnection({
-            agentId: 'codex',
-            agentCliEnv: {
-              codex: {
-                CODEX_BIN: bin,
-              },
-            },
-          });
+      const result = await testAgentConnection({
+        agentId: 'codex',
+        agentCliEnv: {
+          codex: {
+            CODEX_BIN: bin,
+          },
+        },
+      });
 
-          expect(result).toMatchObject({
-            ok: true,
-            kind: 'success',
-            agentName: 'Codex CLI',
-            sample: 'ok',
-            usedExecutableSource: 'fallback_failed',
-            configuredExecutablePath: bin,
-            detectedExecutablePath: expect.any(String),
-            usedExecutablePath: expect.any(String),
-          });
-          expect(result.detail).toContain(`Configured Codex path failed: ${bin}.`);
-          expect(result.detail).toContain('This test succeeded with the PATH Codex CLI at');
-          expect(result.detail).toContain('Update CODEX_BIN or clear the custom path');
-        } finally {
-          await fsp.rm(dir, { recursive: true, force: true });
-        }
-      },
-    );
+      expect(result).toMatchObject({
+        ok: true,
+        kind: 'success',
+        agentName: 'Codex CLI',
+        sample: 'ok',
+        usedExecutableSource: 'fallback_failed',
+        configuredExecutablePath: bin,
+        detectedExecutablePath: wrapperLinkPath,
+        usedExecutablePath: nativeBin,
+      });
+      expect(result.detail).toContain(`Configured Codex path failed: ${bin}.`);
+      expect(result.detail).toContain(`This test succeeded with the PATH Codex CLI at ${wrapperLinkPath}.`);
+      expect(result.detail).toContain('Update CODEX_BIN or clear the custom path');
+    } finally {
+      process.env.PATH = oldPath;
+      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(badRoot, { recursive: true, force: true });
+    }
   });
 
   it('falls back to PATH Codex when a configured shim spawns ENOENT', async () => {

@@ -1634,25 +1634,34 @@ export async function testAgentConnection(
   ) {
     return primaryResult;
   }
+  const fallbackPrefs = stripCodexBinOverride(validatedPrefs);
+  const fallbackAgentEnv = agentCliEnvForAgent(fallbackPrefs, input.agentId);
+  const fallbackExecutableResolution = def
+    ? resolveAgentLaunch(def, fallbackAgentEnv)
+    : executableResolution;
   const fallbackResult = await testAgentConnectionInternal(
     {
       ...input,
-      agentCliEnv: stripCodexBinOverride(validatedPrefs),
+      agentCliEnv: fallbackPrefs,
     },
   );
   if (!fallbackResult.ok) {
     return primaryResult;
   }
+  const fallbackPathResolvedPath =
+    fallbackExecutableResolution.pathResolvedPath ?? executableResolution.pathResolvedPath;
+  const fallbackUsedExecutablePath =
+    fallbackExecutableResolution.launchPath ?? fallbackPathResolvedPath;
   return {
     ...fallbackResult,
     configuredExecutablePath: executableResolution.configuredOverridePath,
-    detectedExecutablePath: executableResolution.pathResolvedPath,
-    usedExecutablePath: executableResolution.launchPath ?? executableResolution.pathResolvedPath,
+    detectedExecutablePath: fallbackPathResolvedPath,
+    usedExecutablePath: fallbackUsedExecutablePath,
     usedExecutableSource: 'fallback_failed',
     detail: redactSecrets(
       codexExecutableFallbackSuccessDetail(
         executableResolution.configuredOverridePath,
-        executableResolution.pathResolvedPath,
+        fallbackPathResolvedPath,
       ),
     ),
   };
