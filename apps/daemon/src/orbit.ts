@@ -104,6 +104,16 @@ function orbitLocaleError(locale: string): Error & { status: number } {
   return error;
 }
 
+function orbitLocaleConflictError(activeLocale: string | null, requestedLocale: string | null): Error & { status: number } {
+  const active = activeLocale ? `${orbitLocaleLabel(activeLocale)} (${activeLocale})` : 'the default locale';
+  const requested = requestedLocale ? `${orbitLocaleLabel(requestedLocale)} (${requestedLocale})` : 'the default locale';
+  const error = new Error(
+    `orbit run already in progress with ${active}; cannot attach request for ${requested}`,
+  ) as Error & { status: number };
+  error.status = 409;
+  return error;
+}
+
 function normalizeOrbitLocale(locale: string | null | undefined): string | null {
   if (typeof locale !== 'string') return null;
   const normalized = locale.trim();
@@ -452,6 +462,7 @@ export class OrbitService {
   private inflight: Promise<OrbitActivitySummary> | null = null;
   private inflightProjectId: string | null = null;
   private inflightAgentRunId: string | null = null;
+  private activeLocale: string | null = null;
   private runHandler: OrbitRunHandler | null = null;
   private templateResolver: OrbitTemplateResolver | null = null;
 
@@ -485,13 +496,20 @@ export class OrbitService {
     trigger: 'manual' | 'scheduled',
     options?: OrbitRunOptions,
   ): Promise<{ projectId: string; agentRunId: string }> {
+    const locale = normalizeOrbitLocale(options?.locale);
+    const localeWasRequested = typeof options?.locale === 'string' && options.locale.trim().length > 0;
+    if ((this.inflight || this.starting) && localeWasRequested && this.activeLocale !== locale) {
+      throw orbitLocaleConflictError(this.activeLocale, locale);
+    }
     if (this.inflight && this.inflightProjectId && this.inflightAgentRunId) {
       return { projectId: this.inflightProjectId, agentRunId: this.inflightAgentRunId };
     }
     if (this.starting) return this.starting;
     if (!this.runHandler) throw new Error('Orbit agent runner is not configured');
 
-    this.starting = this.startRun(trigger, options).finally(() => {
+    this.activeLocale = locale;
+    this.starting = this.startRun(trigger, { ...options, locale }).finally(() => {
+      if (!this.inflight) this.activeLocale = null;
       this.starting = null;
     });
     return this.starting;
@@ -510,7 +528,7 @@ export class OrbitService {
       ? await this.templateResolver(configuredTemplateSkillId).catch(() => null)
       : null;
     const now = new Date(startedAt);
-    const runOptions: OrbitRunOptions = { locale: normalizeOrbitLocale(options?.locale) };
+    const runOptions: OrbitRunOptions = { locale: options?.locale ?? null };
     const prompt = buildOrbitPrompt(now, template, runOptions);
     const systemPrompt = buildOrbitSystemPrompt(now, template, runOptions);
     const handlerStart = await this.runHandler({
@@ -561,6 +579,7 @@ export class OrbitService {
         this.inflight = null;
         this.inflightProjectId = null;
         this.inflightAgentRunId = null;
+        this.activeLocale = null;
         this.reschedule();
       }
     })();
