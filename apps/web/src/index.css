@@ -13460,17 +13460,26 @@ button.ghost.mcp-copy-btn:hover:not(:disabled) {
 .status-pill {
   display: inline-flex;
   align-self: flex-start;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 7px 12px;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   font-size: 11.5px;
+  line-height: 1.35;
   color: var(--text-muted);
+  max-width: min(100%, 520px);
 }
-.status-label { letter-spacing: 0.02em; }
-.status-detail { color: var(--text); }
+.status-label {
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.status-detail {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
 .status-pill[data-tone="error"] {
   border-color: color-mix(in oklab, var(--danger, #d04b4b) 28%, var(--border));
   background: color-mix(in oklab, var(--danger, #d04b4b) 9%, var(--bg-subtle));
