@@ -1,4 +1,4 @@
-name: Fork PR workflow approval
+name: fork-pr-workflow-approval
 
 # This workflow runs in the trusted base-repository context. It never checks out
 # or executes the fork head; the TypeScript policy script only reads PR metadata
