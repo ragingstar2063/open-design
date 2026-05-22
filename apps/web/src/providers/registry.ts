@@ -1047,6 +1047,32 @@ export async function fetchAppVersionInfo(): Promise<AppVersionInfo | null> {
   }
 }
 
+export type LatestGithubReleaseInfo = {
+  tagName: string;
+  htmlUrl: string;
+  stale: boolean;
+};
+
+export async function fetchLatestGithubReleaseInfo(): Promise<LatestGithubReleaseInfo | null> {
+  try {
+    const resp = await fetch('/api/github/open-design/releases/latest');
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as Partial<{
+      tag_name: string;
+      html_url: string;
+      stale: boolean;
+    }>;
+    if (typeof json.tag_name !== 'string' || typeof json.html_url !== 'string') return null;
+    return {
+      tagName: json.tag_name,
+      htmlUrl: json.html_url,
+      stale: json.stale === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export type SkillExampleResult =
   | { html: string }
   // The skill declares a non-HTML preview surface (image / markdown / …)

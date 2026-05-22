@@ -75,7 +75,11 @@ import type {
 } from '../types';
 import { testAgent, testApiProvider } from '../providers/connection-test';
 import { fetchProviderModels } from '../providers/provider-models';
-import { fetchConnectors, fetchDesignTemplates } from '../providers/registry';
+import {
+  fetchConnectors,
+  fetchDesignTemplates,
+  fetchLatestGithubReleaseInfo,
+} from '../providers/registry';
 import { IMAGE_MODELS, MEDIA_PROVIDERS } from '../media/models';
 import { XaiOAuthControl } from './XaiOAuthControl';
 import type { MediaProvider } from '../media/models';
@@ -900,16 +904,11 @@ export function SettingsDialog({
     if (versionChecking || !appVersionInfo) return;
     setVersionChecking(true);
     try {
-      const res = await fetch('https://api.github.com/repos/nexu-io/open-design/releases/latest', {
-        headers: { Accept: 'application/vnd.github+json' },
-      });
-      if (res.ok) {
-        const data = await res.json() as { tag_name?: string; html_url?: string };
-        const latestTag = (data.tag_name ?? '').replace(/^v/, '');
-        if (latestTag && latestTag === appVersionInfo.version) {
-          setAboutToast(t('settings.alreadyLatest'));
-          return;
-        }
+      const release = await fetchLatestGithubReleaseInfo();
+      const latestTag = (release?.tagName ?? '').replace(/^v/, '');
+      if (latestTag && latestTag === appVersionInfo.version) {
+        setAboutToast(t('settings.alreadyLatest'));
+        return;
       }
     } catch {
       // network error — fall through to open releases page
