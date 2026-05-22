@@ -65,20 +65,6 @@ export function ManualEditPanel({
   useEffect(() => {
     selectedTargetRef.current = selectedTarget;
   }, [selectedTarget]);
-  const targetText = targetForInspector
-    ? targetForInspector.fields.text ?? targetForInspector.text ?? ''
-    : '';
-  const canEditTargetText = targetForInspector?.kind === 'text' || targetForInspector?.kind === 'link';
-  const textDirty = canEditTargetText && draft.text !== targetText;
-
-  const commitTargetText = () => {
-    if (!targetForInspector || !canEditTargetText || !textDirty) return;
-    onError('');
-    onApplyPatch(
-      { id: targetForInspector.id, kind: 'set-text', value: draft.text },
-      `Text: ${targetForInspector.label}`,
-    );
-  };
 
   const changeTargetStyle = (key: keyof ManualEditStyles, value: string) => {
     const nextStyles = { ...draft.styles, [key]: value };
@@ -100,33 +86,12 @@ export function ManualEditPanel({
     <aside className="manual-edit-right">
       <section className="manual-edit-modal cc-panel">
         {targetForInspector ? (
-          <>
-            {canEditTargetText ? (
-              <Section title="TEXT">
-                <textarea
-                  className="cc-textarea"
-                  aria-label="Text content"
-                  value={draft.text}
-                  rows={3}
-                  onChange={(event) => {
-                    onDraftChange({ ...draft, text: event.currentTarget.value });
-                  }}
-                  onBlur={commitTargetText}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' || (!event.metaKey && !event.ctrlKey)) return;
-                    event.preventDefault();
-                    commitTargetText();
-                  }}
-                />
-              </Section>
-            ) : null}
-            <StyleInspector
-              styles={draft.styles}
-              layoutEnabled={targetForInspector.isLayoutContainer}
-              onClearSelection={onClearSelection}
-              onChange={changeTargetStyle}
-            />
-          </>
+          <StyleInspector
+            styles={draft.styles}
+            layoutEnabled={targetForInspector.isLayoutContainer}
+            onClearSelection={onClearSelection}
+            onChange={changeTargetStyle}
+          />
         ) : !targetForInspector ? (
           <PageInspector
             enabled={pageStylesEnabled}

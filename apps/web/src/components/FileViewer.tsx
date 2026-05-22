@@ -4611,6 +4611,14 @@ function HtmlViewer({
         void selectManualEditTarget(data.target);
         return;
       }
+      if (data.type === 'od-edit-text-commit') {
+        void applyManualEdit({
+          id: String(data.id),
+          kind: 'set-text',
+          value: String(data.value),
+        }, 'Edit text');
+        return;
+      }
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);

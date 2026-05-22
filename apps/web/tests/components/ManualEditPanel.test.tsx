@@ -59,40 +59,6 @@ describe('ManualEditPanel', () => {
     expect(host.textContent).not.toContain('Advanced');
   });
 
-  it('emits a set-text patch when edited text loses focus', () => {
-    const onDraftChange = vi.fn();
-    const onApplyPatch = vi.fn();
-    renderPanel({ onDraftChange, onApplyPatch });
-
-    const textarea = host.querySelector('textarea[aria-label="Text content"]') as HTMLTextAreaElement | null;
-    if (!textarea) throw new Error('Text textarea not found');
-    expect(textarea.value).toBe('Updated copy');
-
-    act(() => {
-      textarea.value = 'Hero title v2';
-      Simulate.change(textarea);
-    });
-
-    expect(onDraftChange).toHaveBeenCalledWith(expect.objectContaining({ text: 'Hero title v2' }));
-
-    renderPanel({
-      onDraftChange,
-      onApplyPatch,
-      draftText: 'Hero title v2',
-    });
-    const updatedTextarea = host.querySelector('textarea[aria-label="Text content"]') as HTMLTextAreaElement | null;
-    if (!updatedTextarea) throw new Error('Updated text textarea not found');
-
-    act(() => {
-      Simulate.blur(updatedTextarea);
-    });
-
-    expect(onApplyPatch).toHaveBeenCalledWith(
-      { id: 'hero-title', kind: 'set-text', value: 'Hero title v2' },
-      'Text: Hero Title',
-    );
-  });
-
   it('allows returning from an element inspector to the page inspector', () => {
     const onClearSelection = vi.fn();
     renderPanel({ onClearSelection });
@@ -476,7 +442,6 @@ describe('ManualEditPanel', () => {
     onInvalidStyle = vi.fn<OnInvalidStyle>(),
     onClearSelection = vi.fn<OnClearSelection>(),
     attributesText = '{}',
-    draftText = 'Updated copy',
     selectedTarget = target,
     styles = emptyManualEditStyles(),
     pageStylesEnabled = true,
@@ -488,14 +453,13 @@ describe('ManualEditPanel', () => {
     onInvalidStyle?: OnInvalidStyle;
     onClearSelection?: OnClearSelection;
     attributesText?: string;
-    draftText?: string;
     selectedTarget?: ManualEditTarget | null;
     styles?: ReturnType<typeof emptyManualEditStyles>;
     pageStylesEnabled?: boolean;
   } = {}) {
     const draft = {
       ...emptyManualEditDraft('<html></html>'),
-      text: draftText,
+      text: 'Updated copy',
       attributesText,
       styles,
       outerHtml: target.outerHtml,
