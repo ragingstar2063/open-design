@@ -332,11 +332,20 @@ pnpm tools-dev start
 
 <br/>
 
+## 🔗 Staying Ahead
+
+Star Open Design on GitHub，第一时间获取新版本通知。
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/nexu-io/open-design/main/docs/assets/star-us.png" alt="Star Open Design on GitHub" width="640" />
+</p>
+
+<br/>
+
 ## 💬 Community
 
 - 💭 [Discord](https://discord.gg/qhbcCH8Am4)——日常讨论 / Plugin 分享 / 求助
 - 🐦 [@nexudotio](https://x.com/nexudotio)——产品更新
-- 🌟 喜欢就点个 Star，是对我们最大的支持
 
 <br/>
 
