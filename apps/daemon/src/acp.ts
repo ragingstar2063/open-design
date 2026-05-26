@@ -672,9 +672,12 @@ export function attachAcpSession({
   });
 
   stdout.on('data', (chunk: string) => parser.feed(chunk));
-  child.on('close', () => {
+  child.on('close', (code, signal) => {
     clearStageTimer();
     parser.flush();
+    if (!finished && !aborted && !fatal) {
+      fail(`ACP session exited before completion (code=${code ?? 'null'}, signal=${signal ?? 'none'})`);
+    }
   });
   child.on('error', (err: Error) => fail(err.message));
   stdin.on('error', (err: Error) => fail(`stdin error: ${err.message}`));

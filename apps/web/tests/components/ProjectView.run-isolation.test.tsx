@@ -487,6 +487,42 @@ describe('ProjectView conversation run isolation', () => {
     await waitFor(() => expect(streamMessage).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(playSound).toHaveBeenCalledWith('success-sound'));
   });
+
+  it('converges a daemon chat back to idle when the first AMR run fails authentication', async () => {
+    conversationAMessages = [];
+    fetchChatRunStatus.mockResolvedValue(null);
+    streamViaDaemon.mockImplementation(
+      async (options: {
+        onRunCreated?: (runId: string) => void;
+        handlers: { onError: (error: Error) => void };
+      }) => {
+        options.onRunCreated?.('run-auth-expired');
+        options.handlers.onError(
+          new Error('Your authentication token has expired. Please sign in again.'),
+        );
+      },
+    );
+
+    renderProjectView();
+
+    await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+    await waitFor(() => expect(screen.getByTestId('send-message')).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('chat-error').textContent).toBe(
+        'Your authentication token has expired. Please sign in again.',
+      ),
+    );
+    await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('idle'));
+    expect(screen.getByTestId('send-message')).toHaveProperty('disabled', false);
+
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(2));
+  });
 });
 
 function renderProjectView(renderConfig = config, renderProject: Project = project) {

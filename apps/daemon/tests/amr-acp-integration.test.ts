@@ -34,6 +34,13 @@ function spawnFakeVela(env: NodeJS.ProcessEnv = {}): ChildProcess {
   });
 }
 
+function spawnFixtureScript(source: string): ChildProcess {
+  return spawn(process.execPath, ['-e', source], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: process.env,
+  });
+}
+
 async function waitForExit(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return;
   await new Promise<void>((resolve) => {
@@ -175,5 +182,157 @@ describe('AMR ACP transport — end-to-end against fake vela stub', () => {
     expect(ids).toContain('gpt-5.4-mini');
     expect(ids).toContain('openai/gpt-5.4-mini');
     expect(ids).toContain('anthropic/claude-3.7-sonnet');
+  });
+
+  it('surfaces session/new JSON-RPC errors as fatal daemon events', async () => {
+    const child = spawnFakeVela({
+      FAKE_VELA_SESSION_NEW_ERROR: 'forced session/new failure',
+    });
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        model: 'gpt-5.4-mini',
+        mcpServers: [],
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(session.hasFatalError()).toBe(true);
+      expect(session.completedSuccessfully()).toBe(false);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message).toContain('forced session/new failure');
+  });
+
+  it('surfaces unrecoverable session/set_model failures as fatal daemon events', async () => {
+    const child = spawnFakeVela({
+      FAKE_VELA_SET_MODEL_ERROR: 'forced session/set_model failure',
+    });
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        model: 'gpt-5.4-mini',
+        mcpServers: [],
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      expect(session.hasFatalError()).toBe(true);
+      expect(session.completedSuccessfully()).toBe(false);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message).toContain('forced session/set_model failure');
+  });
+
+  it('surfaces session/prompt JSON-RPC errors as fatal daemon events', async () => {
+    const child = spawnFakeVela({
+      FAKE_VELA_PROMPT_ERROR: 'forced session/prompt failure',
+    });
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        model: 'gpt-5.4-mini',
+        mcpServers: [],
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      expect(session.hasFatalError()).toBe(true);
+      expect(session.completedSuccessfully()).toBe(false);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message).toContain('forced session/prompt failure');
+  });
+
+  it('surfaces an actionable error when the ACP child exits before initialize completes', async () => {
+    const child = spawnFixtureScript(
+      "process.stdout.write('not-json\\n'); setTimeout(() => process.exit(0), 20);",
+    );
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        model: 'gpt-5.4-mini',
+        mcpServers: [],
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      expect(session.hasFatalError()).toBe(true);
+      expect(session.completedSuccessfully()).toBe(false);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message).toContain('ACP session exited before completion');
+  });
+
+  it('times out silent ACP children instead of hanging forever', async () => {
+    const child = spawnFixtureScript(
+      'setTimeout(() => process.exit(0), 200);',
+    );
+    const errors: Array<{ event: string; payload: unknown }> = [];
+    try {
+      const session = attachAcpSession({
+        child: child as never,
+        prompt: 'Say hello',
+        cwd: process.cwd(),
+        model: 'gpt-5.4-mini',
+        mcpServers: [],
+        stageTimeoutMs: 25,
+        send: (event, payload) => {
+          if (event === 'error') errors.push({ event, payload });
+        },
+      });
+
+      await waitForExit(child);
+      expect(session.hasFatalError()).toBe(true);
+      expect(session.completedSuccessfully()).toBe(false);
+    } finally {
+      if (child.exitCode === null) child.kill('SIGTERM');
+    }
+
+    const message = String(
+      (errors[0]?.payload as { message?: unknown })?.message ?? '',
+    );
+    expect(message).toContain('timed out');
   });
 });

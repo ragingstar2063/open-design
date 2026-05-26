@@ -1358,6 +1358,156 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Test' })).toBeNull();
   });
+
+  it('renders the signed-in AMR account state inside Settings without leaking vela branding', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/status') {
+        return new Response(
+          JSON.stringify({
+            loggedIn: true,
+            profile: 'local',
+            user: {
+              id: 'user-1',
+              email: 'signed-in@example.com',
+              name: 'Signed In User',
+            },
+            configPath: '/Users/test/.vela/config.json',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [amrAgent] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeTruthy();
+    expect(screen.getByText('signed-in@example.com')).toBeTruthy();
+    expect(screen.queryByText(/AMR \(vela\)/i)).toBeNull();
+    expect(screen.queryByText(/^vela$/i)).toBeNull();
+  });
+
+  it('does not keep a stale signed-in AMR state after a later Settings reopen reads loggedOut', async () => {
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/status') {
+        statusCalls += 1;
+        return new Response(
+          JSON.stringify(
+            statusCalls === 1
+              ? {
+                  loggedIn: true,
+                  profile: 'local',
+                  user: { id: 'user-1', email: 'signed-in@example.com' },
+                  configPath: '/Users/test/.vela/config.json',
+                }
+              : {
+                  loggedIn: false,
+                  profile: 'local',
+                  user: null,
+                  configPath: '/Users/test/.vela/config.json',
+                },
+          ),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const first = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [amrAgent] },
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeTruthy();
+    first.unmount();
+
+    const second = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [amrAgent] },
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+    second.unmount();
+  });
+
+  it('keeps AMR selected in Settings after local logout instead of silently switching agents', async () => {
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/status') {
+        statusCalls += 1;
+        return new Response(
+          JSON.stringify({
+            loggedIn: statusCalls === 1,
+            profile: 'local',
+            user: statusCalls === 1 ? { id: 'user-1', email: 'signed-in@example.com' } : null,
+            configPath: '/Users/test/.vela/config.json',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/logout' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { onPersist } = renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [amrAgent] },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^AMR\b/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^AMR\b/ })).toBeTruthy();
+    expect(
+      onPersist.mock.calls.some(
+        ([nextConfig]) =>
+          typeof nextConfig === 'object' &&
+          nextConfig !== null &&
+          'agentId' in (nextConfig as Record<string, unknown>) &&
+          (nextConfig as Record<string, unknown>).agentId !== 'amr',
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('SettingsDialog media providers interactions', () => {

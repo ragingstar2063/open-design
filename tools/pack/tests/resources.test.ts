@@ -281,4 +281,15 @@ describe("resolveOptionalVelaCliBinary", () => {
       }),
     ).rejects.toThrow(/@powerformer\/vela-cli.*OPEN_DESIGN_VELA_CLI_BIN/);
   });
+
+  it("returns null in non-strict mode when the resolver package is missing", async () => {
+    await expect(
+      resolveOptionalVelaCliBinary({
+        env: {},
+        importPackage: async () => {
+          throw new Error("not installed");
+        },
+      }),
+    ).resolves.toBeNull();
+  });
 });

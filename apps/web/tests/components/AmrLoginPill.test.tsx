@@ -201,9 +201,6 @@ describe('AmrLoginPill', () => {
 
     renderPill();
 
-    // The visible label is "Signed in"; the button is identified by its
-    // aria-label (Sign out) so logout-by-keyboard / screen reader users can
-    // act on it without hovering for the alternate label.
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
     });
@@ -230,9 +227,6 @@ describe('AmrLoginPill', () => {
     globalThis.fetch = fetchMock as typeof fetch;
 
     const cardSelect = vi.fn();
-    // Mimics the SettingsDialog layout: an outer card whose select button
-    // captures clicks; the pill is a sibling and must not let its own click
-    // reach this handler.
     render(
       <I18nProvider initial="en">
         <div
@@ -290,6 +284,84 @@ describe('AmrLoginPill', () => {
     expect(screen.getByText('AMR sign-in failed.')).toBeTruthy();
     expect(screen.queryByText('Signing in…')).toBeNull();
   });
+
+  it('does not POST /login twice while sign-in polling is already pending', async () => {
+    let loginCalls = 0;
+    const fetchMock = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.endsWith('/api/integrations/vela/status')) {
+        return jsonResponse({
+          body: { loggedIn: false, profile: 'prod', user: null, configPath: '/x' },
+        });
+      }
+      if (
+        url.endsWith('/api/integrations/vela/login') &&
+        init?.method === 'POST'
+      ) {
+        loginCalls += 1;
+        return jsonResponse({ status: 202, body: { pid: 4242 } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    renderPill();
+    const signIn = await screen.findByRole('button', { name: 'Sign in' });
+    fireEvent.click(signIn);
+    fireEvent.click(signIn);
+
+    await waitFor(() => {
+      expect(loginCalls).toBe(1);
+    });
+    expect(await screen.findByText('Signing in…')).toBeTruthy();
+  });
+
+  it('recovers from transient /status failures and still flips to signed-in when polling succeeds later', async () => {
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.endsWith('/api/integrations/vela/status')) {
+        statusCalls += 1;
+        if (statusCalls === 2) {
+          throw new Error('temporary network failure');
+        }
+        return jsonResponse({
+          body:
+            statusCalls >= 3
+              ? {
+                  loggedIn: true,
+                  profile: 'local',
+                  configPath: '/x',
+                  user: { id: 'u', email: 'leaf@example.com', plan: 'free' },
+                }
+              : { loggedIn: false, profile: 'local', user: null, configPath: '/x' },
+        });
+      }
+      if (
+        url.endsWith('/api/integrations/vela/login') &&
+        init?.method === 'POST'
+      ) {
+        return jsonResponse({ status: 202, body: { pid: 4242 } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    renderPill();
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in' }));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2100));
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+    });
+    expect(screen.getByText('leaf@example.com')).toBeTruthy();
+  }, 10_000);
 
   it('cancels a timed-out login attempt and restores the Sign-in action', async () => {
     let loginStarted = false;
@@ -385,5 +457,81 @@ describe('AmrLoginPill', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
     });
+  });
+
+  it('converges a stale signed-in snapshot back to Sign-in when a later status read reports loggedOut', async () => {
+    let readCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      readCount += 1;
+      return jsonResponse({
+        body:
+          readCount === 1
+            ? {
+                loggedIn: true,
+                profile: 'local',
+                configPath: '/x',
+                user: { id: 'u', email: 'leaf@example.com', plan: 'free' },
+              }
+            : { loggedIn: false, profile: 'local', user: null, configPath: '/x' },
+      });
+    }) as typeof fetch;
+
+    const first = renderPill();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sign out' })).toBeTruthy();
+    });
+    first.unmount();
+
+    renderPill();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    });
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull();
+  });
+
+  it('does not silently auto-recover to signed-in after a local logout completes', async () => {
+    let loggedIn = true;
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : (input as URL).toString();
+      if (url.endsWith('/api/integrations/vela/status')) {
+        statusCalls += 1;
+        return jsonResponse({
+          body: loggedIn
+            ? {
+                loggedIn: true,
+                profile: 'local',
+                configPath: '/x',
+                user: { id: 'u', email: 'leaf@example.com', plan: 'free' },
+              }
+            : { loggedIn: false, profile: 'local', user: null, configPath: '/x' },
+        });
+      }
+      if (
+        url.endsWith('/api/integrations/vela/logout') &&
+        init?.method === 'POST'
+      ) {
+        loggedIn = false;
+        return jsonResponse({ body: { ok: true } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    renderPill();
+    const logoutBtn = await screen.findByRole('button', { name: 'Sign out' });
+    fireEvent.click(logoutBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    });
+    const callsAfterLogout = statusCalls;
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeTruthy();
+    expect(statusCalls).toBe(callsAfterLogout);
   });
 });

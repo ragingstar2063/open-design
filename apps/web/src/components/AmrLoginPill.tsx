@@ -146,6 +146,7 @@ export function AmrLoginPill({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const loginStartedAtRef = useRef<number | null>(null);
+  const loginPendingRef = useRef(false);
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -162,7 +163,11 @@ export function AmrLoginPill({
 
   useEffect(() => {
     void refresh();
-    return () => stopPolling();
+    return () => {
+      loginPendingRef.current = false;
+      loginStartedAtRef.current = null;
+      stopPolling();
+    };
   }, [refresh, stopPolling]);
 
   const startPolling = useCallback((startedAt = Date.now()) => {
@@ -174,6 +179,7 @@ export function AmrLoginPill({
       if (outcome === 'signed-in') {
         stopPolling();
         loginStartedAtRef.current = null;
+        loginPendingRef.current = false;
         setPending(null);
         return;
       }
@@ -185,6 +191,7 @@ export function AmrLoginPill({
           );
         }
         loginStartedAtRef.current = null;
+        loginPendingRef.current = false;
         setPending(null);
         setErrorMessage(t('settings.amrLoginErrorCompact'));
       }
@@ -205,6 +212,7 @@ export function AmrLoginPill({
         startPolling(startedAt);
       } else if (reason === 'login-canceled') {
         loginStartedAtRef.current = null;
+        loginPendingRef.current = false;
         stopPolling();
         setPending(null);
       }
@@ -213,6 +221,7 @@ export function AmrLoginPill({
         if (next.loggedIn) {
           stopPolling();
           loginStartedAtRef.current = null;
+          loginPendingRef.current = false;
           setPending(null);
           setErrorMessage(null);
           return;
@@ -228,6 +237,7 @@ export function AmrLoginPill({
           Date.now() - loginStartedAtRef.current < AMR_LOGIN_STARTUP_SETTLE_MS;
         if (!pendingStartup) {
           loginStartedAtRef.current = null;
+          loginPendingRef.current = false;
           setPending(null);
         }
       });
@@ -241,6 +251,8 @@ export function AmrLoginPill({
   const handleLogin = useCallback(
     async (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
+      if (loginPendingRef.current) return;
+      loginPendingRef.current = true;
       const startedAt = Date.now();
       loginStartedAtRef.current = startedAt;
       setErrorMessage(null);
@@ -248,6 +260,7 @@ export function AmrLoginPill({
       const result = await startVelaLogin();
       if (!result.ok && !result.alreadyRunning) {
         loginStartedAtRef.current = null;
+        loginPendingRef.current = false;
         setPending(null);
         setErrorMessage(result.error || t('settings.amrLoginErrorCompact'));
         return;
@@ -265,6 +278,7 @@ export function AmrLoginPill({
       setPending('logout');
       const result = await velaLogout();
       loginStartedAtRef.current = null;
+      loginPendingRef.current = false;
       setPending(null);
       if (!result.ok) {
         setErrorMessage(t('settings.amrLoginErrorCompact'));

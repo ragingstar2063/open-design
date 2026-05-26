@@ -113,6 +113,25 @@ beforeEach(() => {
 });
 
 describe('EntryShell onboarding AMR Cloud runtime', () => {
+  it('does not auto-select AMR Cloud when the AMR runtime is unavailable', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      jsonResponse({ loggedIn: false, profile: 'prod', user: null, configPath: '/x' }),
+    ) as typeof fetch;
+    const props = renderOnboarding({
+      agents: [cliAgent()],
+      onRefreshAgents: vi.fn(() => [cliAgent()]),
+    });
+
+    expect(screen.queryByRole('button', { name: /AMR Cloud/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Local coding agent/i }));
+
+    await waitFor(() => {
+      expect(props.onAgentChange).not.toHaveBeenCalledWith('amr');
+    });
+    expect(screen.getByText('Local CLI')).toBeTruthy();
+    expect(screen.queryByText('Sign in to continue')).toBeNull();
+  });
+
   it('shows AMR Cloud as the recommended default when AMR is available', async () => {
     globalThis.fetch = vi.fn(async () =>
       jsonResponse({ loggedIn: false, profile: 'prod', user: null, configPath: '/x' }),
@@ -255,6 +274,47 @@ describe('EntryShell onboarding AMR Cloud runtime', () => {
 
     expect(screen.getByText('Signing in…')).toBeTruthy();
     await vi.advanceTimersByTimeAsync(2000);
+    await vi.waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'About you' })).toBeTruthy();
+    });
+  });
+
+  it('recovers from a transient status failure during login polling and still continues after authorization completes', async () => {
+    let statusCalls = 0;
+    const fetchMock = vi.fn(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/integrations/vela/status')) {
+        statusCalls += 1;
+        if (statusCalls === 2) throw new Error('temporary network failure');
+        return jsonResponse(
+          statusCalls >= 4
+            ? {
+                loggedIn: true,
+                profile: 'prod',
+                user: { id: 'u', email: 'user@example.com' },
+                configPath: '/x',
+              }
+            : { loggedIn: false, profile: 'prod', user: null, configPath: '/x' },
+        );
+      }
+      if (url.endsWith('/api/integrations/vela/login') && init?.method === 'POST') {
+        return jsonResponse({ pid: 123 }, 202);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+    renderOnboarding();
+
+    const signIn = await screen.findByRole('button', { name: /Sign in to continue/i });
+    vi.useFakeTimers();
+    fireEvent.click(signIn);
+    await act(async () => {});
+
+    expect(screen.getByText('Signing in…')).toBeTruthy();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(screen.getByText('Signing in…')).toBeTruthy();
+
+    await vi.advanceTimersByTimeAsync(4000);
     await vi.waitFor(() => {
       expect(screen.getByRole('heading', { name: 'About you' })).toBeTruthy();
     });

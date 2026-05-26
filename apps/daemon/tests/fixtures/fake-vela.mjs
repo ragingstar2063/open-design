@@ -32,6 +32,9 @@
  *                                   so tests can observe the in-flight state
  *   FAKE_VELA_LOGIN_USER_EMAIL   – email written into the saved profile
  *   FAKE_VELA_LOGIN_USER_PLAN    – plan written into the saved profile
+ *   FAKE_VELA_SESSION_NEW_ERROR  – when set, session/new returns a JSON-RPC error
+ *   FAKE_VELA_SET_MODEL_ERROR    – when set, session/set_model returns a JSON-RPC error
+ *   FAKE_VELA_PROMPT_ERROR       – when set, session/prompt returns a JSON-RPC error
  *   FAKE_VELA_REQUIRE_SET_MODEL  – strict gate (default on); set to '0' to
  *                                   accept session/prompt without prior
  *                                   session/set_model (legacy behaviour)
@@ -45,6 +48,9 @@ import { argv, stdin, stdout, stderr, env, exit } from 'node:process';
 const SESSION_ID = env.FAKE_VELA_SESSION_ID || 'fake-vela-session-1';
 const ASSISTANT_TEXT = env.FAKE_VELA_TEXT || 'Hello from fake vela.';
 const THOUGHT_TEXT = env.FAKE_VELA_THOUGHT || '';
+const SESSION_NEW_ERROR = env.FAKE_VELA_SESSION_NEW_ERROR || '';
+const SET_MODEL_ERROR = env.FAKE_VELA_SET_MODEL_ERROR || '';
+const PROMPT_ERROR = env.FAKE_VELA_PROMPT_ERROR || '';
 const AVAILABLE_MODELS = [
   { modelId: 'openai/gpt-5.4-mini', name: 'gpt-5.4-mini' },
   { modelId: 'anthropic/claude-3.7-sonnet', name: 'claude-3.7-sonnet' },
@@ -69,6 +75,14 @@ function writeResult(id, result) {
 
 function writeNotification(method, params) {
   writeMessage({ jsonrpc: '2.0', method, params });
+}
+
+function writeError(id, message, code = -32603) {
+  writeMessage({
+    jsonrpc: '2.0',
+    id,
+    error: { code, message },
+  });
 }
 
 function logDiag(line) {
@@ -112,6 +126,10 @@ function handleMessage(msg) {
       });
       return;
     case 'session/new':
+      if (SESSION_NEW_ERROR) {
+        writeError(id, SESSION_NEW_ERROR);
+        return;
+      }
       writeResult(id, {
         sessionId: SESSION_ID,
         models: {
@@ -121,6 +139,10 @@ function handleMessage(msg) {
       });
       return;
     case 'session/set_model': {
+      if (SET_MODEL_ERROR) {
+        writeError(id, SET_MODEL_ERROR, -32099);
+        return;
+      }
       const next = typeof params?.modelId === 'string' ? params.modelId.trim() : '';
       const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : SESSION_ID;
       if (next) currentModelId = next;
@@ -138,16 +160,13 @@ function handleMessage(msg) {
       return;
     }
     case 'session/prompt': {
+      if (PROMPT_ERROR) {
+        writeError(id, PROMPT_ERROR, -32602);
+        return;
+      }
       const sessionId = typeof params?.sessionId === 'string' ? params.sessionId : SESSION_ID;
       if (STRICT_SET_MODEL && !sessionsWithModel.has(sessionId)) {
-        writeMessage({
-          jsonrpc: '2.0',
-          id,
-          error: {
-            code: -32602,
-            message: 'session/set_model must be called before session/prompt',
-          },
-        });
+        writeError(id, 'session/set_model must be called before session/prompt', -32602);
         return;
       }
       emitSessionUpdates(sessionId);
