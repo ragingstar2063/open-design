@@ -128,6 +128,29 @@ describe('readVelaLoginStatus', () => {
     expect(JSON.stringify(status)).not.toContain('rt-env-secret');
   });
 
+  it('prefers configured AMR env credentials over an incomplete ~/.amr active profile', () => {
+    writeConfig({
+      profiles: {
+        local: {
+          apiUrl: 'http://localhost:18080',
+          user: { id: 'stale-user', email: 'stale@example.com' },
+        },
+      },
+    });
+    const status = readVelaLoginStatus(
+      { OPEN_DESIGN_AMR_PROFILE: 'local' },
+      {
+        VELA_RUNTIME_KEY: 'rt-env-secret',
+        VELA_LINK_URL: 'https://openrouter.example/v1',
+      },
+    );
+    expect(status.loggedIn).toBe(true);
+    expect(status.profile).toBe('local');
+    expect(status.user).toBeNull();
+    expect(JSON.stringify(status)).not.toContain('rt-env-secret');
+    expect(JSON.stringify(status)).not.toContain('stale@example.com');
+  });
+
   it('uses the Settings-configured AMR profile when reading status', () => {
     writeConfig({
       profiles: {

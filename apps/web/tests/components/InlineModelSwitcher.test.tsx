@@ -209,6 +209,37 @@ describe('InlineModelSwitcher AMR row', () => {
     expect(within(popover).queryByRole('button', { name: 'Sign out' })).toBeNull();
   });
 
+  it('treats env-backed AMR login as signed in even when no user profile is available', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/integrations/vela/status') {
+        return new Response(
+          JSON.stringify({
+            loggedIn: true,
+            profile: 'default',
+            user: null,
+            configPath: '/Users/test/.amr/config.json',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSwitcher();
+
+    fireEvent.click(screen.getByTestId('inline-model-switcher-chip'));
+
+    const popover = screen.getByTestId('inline-model-switcher-popover');
+    const amrButton = await within(popover).findByRole('radio', {
+      name: /^AMR\s+Signed in$/i,
+    });
+    expect(within(amrButton).getByText(/Signed in/i)).toBeTruthy();
+    expect(within(popover).queryByText(/@/i)).toBeNull();
+    expect(within(popover).queryByRole('button', { name: 'Sign out' })).toBeNull();
+  });
+
   it('renders daemon-reported in-flight login attempts as cancelable', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = input.toString();

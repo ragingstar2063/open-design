@@ -525,6 +525,57 @@ describe('POST /api/integrations/vela/logout', () => {
     }
   });
 
+  it('clears both Settings-backed AMR env credentials and same-profile ~/.amr credentials on logout', async () => {
+    const dataDir = process.env.OD_DATA_DIR as string;
+    const previous = await readAppConfig(dataDir);
+    seedLogin('local', {
+      user: { id: 'local-user', email: 'local@example.com' },
+    });
+    await writeAppConfig(dataDir, {
+      ...previous,
+      agentCliEnv: {
+        ...(previous.agentCliEnv ?? {}),
+        amr: {
+          ...((previous.agentCliEnv?.amr as Record<string, string>) ?? {}),
+          VELA_BIN: FAKE_VELA,
+          VELA_OPENCODE_BIN: '/tmp/opencode',
+          OPEN_DESIGN_AMR_PROFILE: 'local',
+          VELA_RUNTIME_KEY: 'rt-env-secret',
+          VELA_LINK_URL: 'https://openrouter.example/v1',
+        },
+      },
+    });
+
+    try {
+      const before = await getJson<{ loggedIn: boolean }>(
+        `${baseUrl}/api/integrations/vela/status`,
+      );
+      expect(before.body.loggedIn).toBe(true);
+
+      const { status, body } = await postJson<{ ok?: boolean }>(
+        `${baseUrl}/api/integrations/vela/logout`,
+      );
+      expect(status).toBe(200);
+      expect(body.ok).toBe(true);
+
+      const after = await getJson<{ loggedIn: boolean }>(
+        `${baseUrl}/api/integrations/vela/status`,
+      );
+      expect(after.body.loggedIn).toBe(false);
+
+      const nextConfig = await readAppConfig(dataDir);
+      expect(nextConfig.agentCliEnv?.amr?.VELA_RUNTIME_KEY).toBeUndefined();
+      expect(nextConfig.agentCliEnv?.amr?.VELA_LINK_URL).toBeUndefined();
+
+      const nextAmrConfig = JSON.parse(readFileSync(configPath(), 'utf8'));
+      expect(nextAmrConfig.profiles.local.runtimeKey).toBeUndefined();
+      expect(nextAmrConfig.profiles.local.user).toBeUndefined();
+      expect(nextAmrConfig.profiles.local.linkUrl).toBe('http://localhost:18081');
+    } finally {
+      await writeAppConfig(dataDir, previous as unknown as Record<string, unknown>);
+    }
+  });
+
   it('logs out the Settings-configured AMR profile from the AMR config file', async () => {
     const dataDir = process.env.OD_DATA_DIR as string;
     const previous = await readAppConfig(dataDir);
