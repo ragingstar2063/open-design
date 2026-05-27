@@ -4622,6 +4622,7 @@ function amrAccountFailureText(error: Error): string | null {
       typeof details?.actionUrl === 'string' && details.actionUrl.trim()
         ? details.actionUrl.trim()
         : DEFAULT_AMR_RECHARGE_URL;
+    if (error.message.includes(walletUrl)) return error.message;
     return `${error.message}\n\n[Recharge AMR wallet](${walletUrl})`;
   }
   if (coded.code === 'AMR_AUTH_REQUIRED') {
