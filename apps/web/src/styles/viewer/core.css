@@ -1314,6 +1314,11 @@
    is on; takes the place of the chat sidebar's removed Comments tab.
    Floats over the artifact preview at the right edge. */
 .comment-side-panel {
+  --comment-accent: #ff5a3c;
+  --comment-accent-strong: color-mix(in srgb, var(--comment-accent) 78%, var(--text));
+  --comment-accent-surface: color-mix(in srgb, var(--comment-accent) 10%, var(--bg-panel));
+  --comment-accent-surface-strong: color-mix(in srgb, var(--comment-accent) 18%, var(--bg-panel));
+  --comment-accent-border: color-mix(in srgb, var(--comment-accent) 64%, var(--border));
   position: absolute;
   top: 8px;
   right: 8px;
@@ -1459,18 +1464,19 @@
   border-radius: 8px;
   padding: 10px 12px;
   background: transparent;
+  color: var(--text);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 .comment-side-item.selected {
-  background: #fff1ec;
-  border-color: #ff8c75;
+  background: var(--comment-accent-surface);
+  border-color: var(--comment-accent-border);
 }
 .comment-side-item.active {
-  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
-  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
-  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--comment-accent-surface-strong);
+  border-color: var(--comment-accent-border);
+  box-shadow: inset 3px 0 0 var(--comment-accent);
 }
 .comment-side-item-head {
   display: flex;
@@ -1514,7 +1520,7 @@
   height: 16px;
   border-radius: 4px;
   border: 1.5px solid var(--border);
-  background: #fff;
+  background: var(--bg-panel);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -1524,8 +1530,8 @@
   flex-shrink: 0;
 }
 .comment-side-check.checked {
-  background: #ff5a3c;
-  border-color: #ff5a3c;
+  background: var(--comment-accent);
+  border-color: var(--comment-accent);
 }
 .comment-side-body {
   font-size: 13px;
@@ -1540,12 +1546,12 @@
   gap: 8px;
   padding: 8px 12px;
   border-top: 1px solid var(--border);
-  background: #fff1ec;
+  background: var(--comment-accent-surface);
 }
 .comment-side-selectcount {
   flex: 1;
   font-size: 12px;
-  color: #cc3a20;
+  color: var(--comment-accent-strong);
 }
 .comment-side-selectbar .ghost {
   background: transparent;
@@ -1563,22 +1569,23 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #ff5a3c;
+  background: var(--comment-accent);
   color: #fff;
-  border: 1px solid #ff5a3c;
+  border: 1px solid var(--comment-accent);
   border-radius: 6px;
   padding: 5px 10px;
   font-size: 12px;
   cursor: pointer;
 }
 .comment-side-selectbar .primary:disabled {
-  background: #ffb9aa;
-  border-color: #ffb9aa;
+  background: color-mix(in srgb, var(--comment-accent) 45%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--comment-accent) 45%, var(--border));
+  color: color-mix(in srgb, #fff 68%, var(--text-muted));
   cursor: not-allowed;
 }
 .comment-side-selectbar .primary:hover:not(:disabled) {
-  background: #e94a2d;
-  border-color: #e94a2d;
+  background: color-mix(in srgb, var(--comment-accent) 88%, #000);
+  border-color: color-mix(in srgb, var(--comment-accent) 88%, #000);
 }
 .comment-side-new-comment {
   flex: 0 0 auto;

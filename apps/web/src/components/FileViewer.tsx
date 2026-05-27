@@ -507,6 +507,27 @@ export function effectivePreviewScale(
   return Math.min(previewScale, fitScale);
 }
 
+type PreviewOverlayTransform = { scale: number; offsetX: number; offsetY: number };
+
+export function previewOverlayTransform(
+  viewport: PreviewViewportId,
+  previewScale: number,
+  canvasSize?: PreviewCanvasSize,
+): PreviewOverlayTransform {
+  const scale = effectivePreviewScale(viewport, previewScale, canvasSize);
+  if (viewport === 'desktop') return { scale, offsetX: 0, offsetY: 0 };
+  const preset = PREVIEW_VIEWPORT_PRESETS.find((item) => item.id === viewport);
+  const pad = 24;
+  if (!preset?.width || !preset.height) return { scale, offsetX: pad, offsetY: pad };
+  const availableWidth = Math.max(1, (canvasSize?.width ?? preset.width * scale + pad * 2) - pad * 2);
+  const scaledWidth = preset.width * scale;
+  return {
+    scale,
+    offsetX: pad + Math.max(0, (availableWidth - scaledWidth) / 2),
+    offsetY: pad,
+  };
+}
+
 function previewScaleShellStyle(
   viewport: PreviewViewportId,
   previewScale: number,
@@ -2889,6 +2910,8 @@ function CommentPreviewOverlays({
   boardTool,
   showActivePin = false,
   scale,
+  offsetX,
+  offsetY,
   strokePoints,
   onOpenComment,
 }: {
@@ -2900,9 +2923,12 @@ function CommentPreviewOverlays({
   boardTool: BoardTool;
   showActivePin?: boolean;
   scale: number;
+  offsetX: number;
+  offsetY: number;
   strokePoints: StrokePoint[];
   onOpenComment: (comment: PreviewComment, snapshot: PreviewCommentSnapshot) => void;
 }) {
+  const overlayOffset = { x: offsetX, y: offsetY };
   const visibleComments = comments
     .map((comment, index) => ({
       comment,
@@ -2916,7 +2942,7 @@ function CommentPreviewOverlays({
   return (
     <div className="comment-overlay-layer" aria-hidden={false}>
       {visibleComments.map(({ comment, index, snapshot }) => {
-        const bounds = overlayBoundsFromSnapshot(snapshot, scale);
+        const bounds = overlayBoundsFromSnapshot(snapshot, scale, overlayOffset);
         const label = commentTargetDisplayName(comment);
         return (
           <div
@@ -2951,6 +2977,7 @@ function CommentPreviewOverlays({
         <CommentTargetOverlay
           snapshot={targetOverlay}
           scale={scale}
+          offset={overlayOffset}
           selected={Boolean(activeTarget)}
           hoveredMemberId={hoveredPodMemberId}
         />
@@ -2958,7 +2985,7 @@ function CommentPreviewOverlays({
       {showActivePin && activeTarget ? (
         <div
           className="comment-active-pin"
-          style={activeCommentPinStyle(activeTarget, scale)}
+          style={activeCommentPinStyle(activeTarget, scale, overlayOffset)}
           data-testid="comment-active-pin"
           aria-hidden="true"
         >
@@ -2968,7 +2995,7 @@ function CommentPreviewOverlays({
       {boardTool === 'pod' && strokePoints.length > 1 ? (
         <svg className="board-pod-stroke">
           <polyline
-            points={strokePoints.map((point) => `${point.x * scale},${point.y * scale}`).join(' ')}
+            points={strokePoints.map((point) => `${offsetX + point.x * scale},${offsetY + point.y * scale}`).join(' ')}
           />
         </svg>
       ) : null}
@@ -2976,36 +3003,43 @@ function CommentPreviewOverlays({
   );
 }
 
-function activeCommentPinStyle(target: PreviewCommentSnapshot, scale: number): CSSProperties {
+function activeCommentPinStyle(
+  target: PreviewCommentSnapshot,
+  scale: number,
+  offset: { x: number; y: number } = { x: 0, y: 0 },
+): CSSProperties {
   const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const anchor = target.hoverPoint ?? {
     x: target.position.x,
     y: target.position.y,
   };
   return {
-    left: Math.round(anchor.x * safeScale),
-    top: Math.round(anchor.y * safeScale),
+    left: Math.round(offset.x + anchor.x * safeScale),
+    top: Math.round(offset.y + anchor.y * safeScale),
   };
 }
 
 export function CommentTargetOverlay({
   snapshot,
   scale,
+  offset,
   selected,
   hoveredMemberId,
 }: {
   snapshot: PreviewCommentSnapshot;
   scale: number;
+  offset?: { x: number; y: number };
   selected: boolean;
   hoveredMemberId?: string | null;
 }) {
+  const overlayOffset = offset ?? { x: 0, y: 0 };
   const displayMembers = podDisplayMembers(snapshot);
   if (displayMembers.length > 0) {
     const overlayWeights = podOverlayWeights(displayMembers);
     return (
       <>
         {displayMembers.map((member, index) => {
-          const bounds = overlayBoundsFromSnapshot(member, scale);
+          const bounds = overlayBoundsFromSnapshot(member, scale, overlayOffset);
           const width = Math.round(member.position.width);
           const height = Math.round(member.position.height);
           const overlayWeight = overlayWeights[index] ?? {
@@ -3040,7 +3074,7 @@ export function CommentTargetOverlay({
   // Non-member fallback: single-element snapshots have no per-member chips,
   // so the hover-focus channel never reaches this branch — no is-hover-focused
   // class needed here.
-  const bounds = overlayBoundsFromSnapshot(snapshot, scale);
+  const bounds = overlayBoundsFromSnapshot(snapshot, scale, overlayOffset);
   return (
     <div
       className={`comment-target-overlay${selected ? ' selected' : ''}`}
@@ -4254,7 +4288,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
   const [slideState, setSlideState] = useState<SlideState | null>(
     () => htmlPreviewSlideState.get(previewStateKey) ?? null,
   );
-  const overlayPreviewScale = effectivePreviewScale(previewViewport, previewScale, previewBodySize);
+  const overlayPreviewTransform = previewOverlayTransform(previewViewport, previewScale, previewBodySize);
+  const overlayPreviewScale = overlayPreviewTransform.scale;
   const shareRef = useRef<HTMLDivElement | null>(null);
   const [chromeActionsHost, setChromeActionsHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
@@ -6251,6 +6286,7 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
       sending={sendingBoardBatch || streaming}
       t={t}
       scale={overlayPreviewScale}
+      offset={{ x: overlayPreviewTransform.offsetX, y: overlayPreviewTransform.offsetY }}
       bounds={previewBodySize}
       docked={false}
     />
@@ -6909,6 +6945,8 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
                 boardTool={boardTool}
                 showActivePin={commentCreateMode}
                 scale={overlayPreviewScale}
+                offsetX={overlayPreviewTransform.offsetX}
+                offsetY={overlayPreviewTransform.offsetY}
                 strokePoints={strokePoints}
                 onOpenComment={(comment, snapshot) => {
                   setCommentPanelOpen(true);
@@ -6943,7 +6981,11 @@ const [manualEditTargets, setManualEditTargets] = useState<ManualEditTarget[]>([
             ) : null}
             {commentComposer}
             {boardMode && !commentCreateMode && hoveredCommentTarget && (!activeCommentTarget || commentPortalHost) ? (
-              <AnnotationHoverPopover target={hoveredCommentTarget} scale={overlayPreviewScale} />
+              <AnnotationHoverPopover
+                target={hoveredCommentTarget}
+                scale={overlayPreviewScale}
+                offset={{ x: overlayPreviewTransform.offsetX, y: overlayPreviewTransform.offsetY }}
+              />
             ) : null}
             {commentPortalHost && commentSidePanel
               ? createPortal(commentSidePanel, commentPortalHost)

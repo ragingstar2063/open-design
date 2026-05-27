@@ -31,6 +31,7 @@ import {
   applyInspectOverridesToSource,
   effectivePreviewScale,
   parseInspectOverridesFromSource,
+  previewOverlayTransform,
   serializeInspectOverrides,
   updateInspectOverride,
 } from '../../src/components/FileViewer';
@@ -111,6 +112,25 @@ describe('FileViewer preview scale', () => {
   it('clamps mobile and tablet overlay scale to the iframe auto-fit scale', () => {
     expect(effectivePreviewScale('mobile', 1, { width: 390, height: 844 })).toBeLessThan(1);
     expect(effectivePreviewScale('tablet', 1.25, { width: 820, height: 700 })).toBeLessThan(1);
+  });
+
+  it('offsets tablet and mobile overlays to the centered viewport card', () => {
+    expect(previewOverlayTransform('desktop', 1.25, { width: 1200, height: 800 })).toEqual({
+      scale: 1.25,
+      offsetX: 0,
+      offsetY: 0,
+    });
+
+    expect(previewOverlayTransform('mobile', 1, { width: 1200, height: 1000 })).toEqual({
+      scale: 1,
+      offsetX: 405,
+      offsetY: 24,
+    });
+
+    const tablet = previewOverlayTransform('tablet', 1.25, { width: 1200, height: 800 });
+    expect(tablet.scale).toBeCloseTo(752 / 1180, 5);
+    expect(tablet.offsetX).toBeCloseTo(24 + (1152 - 820 * (752 / 1180)) / 2, 5);
+    expect(tablet.offsetY).toBe(24);
   });
 });
 

@@ -44,6 +44,7 @@ function compactFontFamily(value: string | undefined): string | null {
 
 type AnnotationStyleRow = { label: string; value: string; swatch?: string };
 type PopoverBounds = { width: number; height: number };
+type PopoverOffset = { x: number; y: number };
 
 function annotationStyleRows(target: PreviewCommentSnapshot): AnnotationStyleRow[] {
   const rows: AnnotationStyleRow[] = [];
@@ -78,6 +79,7 @@ function popoverAnchorStyle(
   target: PreviewCommentSnapshot,
   scale: number,
   bounds?: PopoverBounds,
+  offset: PopoverOffset = { x: 0, y: 0 },
 ): CSSProperties {
   const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
   const anchor = target.hoverPoint ?? {
@@ -87,11 +89,11 @@ function popoverAnchorStyle(
   const pad = 14;
   const width = 320;
   const estimatedHeight = 172;
-  const preferredLeft = clampPopoverCoordinate(anchor.x * safeScale + pad, pad);
-  const preferredTop = clampPopoverCoordinate(anchor.y * safeScale + pad, pad);
+  const anchorX = offset.x + anchor.x * safeScale;
+  const anchorY = offset.y + anchor.y * safeScale;
+  const preferredLeft = clampPopoverCoordinate(anchorX + pad, pad);
+  const preferredTop = clampPopoverCoordinate(anchorY + pad, pad);
   if (bounds?.width && bounds.width > 0) {
-    const anchorX = anchor.x * safeScale;
-    const anchorY = anchor.y * safeScale;
     const maxLeft = Math.max(pad, bounds.width - width - pad);
     const left = preferredLeft > maxLeft
       ? Math.max(pad, Math.min(maxLeft, anchorX - width - pad))
@@ -131,13 +133,21 @@ export function AnnotationStyleSummary({
   );
 }
 
-export function AnnotationHoverPopover({ target, scale }: { target: PreviewCommentSnapshot; scale: number }) {
+export function AnnotationHoverPopover({
+  target,
+  scale,
+  offset,
+}: {
+  target: PreviewCommentSnapshot;
+  scale: number;
+  offset?: PopoverOffset;
+}) {
   return (
     <div
       className="comment-popover annotation-hover-popover"
       data-testid="annotation-hover-popover"
       role="tooltip"
-      style={popoverAnchorStyle(target, scale)}
+      style={popoverAnchorStyle(target, scale, undefined, offset)}
     >
       <AnnotationStyleSummary target={target} testId="annotation-hover-style-summary" />
     </div>
@@ -162,6 +172,7 @@ export function BoardComposerPopover({
   t,
   scale = 1,
   bounds,
+  offset,
   docked = false,
 }: {
   target: PreviewCommentSnapshot;
@@ -181,6 +192,7 @@ export function BoardComposerPopover({
   t: TranslateFn;
   scale?: number;
   bounds?: PopoverBounds;
+  offset?: PopoverOffset;
   docked?: boolean;
 }) {
   const pendingCount = notes.length + (draft.trim() ? 1 : 0);
@@ -193,7 +205,7 @@ export function BoardComposerPopover({
       role="dialog"
       aria-modal="false"
       aria-label="Annotation"
-      style={docked ? undefined : popoverAnchorStyle(target, scale, bounds)}
+      style={docked ? undefined : popoverAnchorStyle(target, scale, bounds, offset)}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault();
