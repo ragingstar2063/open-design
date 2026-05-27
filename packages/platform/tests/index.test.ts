@@ -227,6 +227,23 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settin
     expect(env.no_proxy).toBe("*");
   });
 
+  it("preserves a wildcard macOS bypass list when other entries are present", () => {
+    const env = parseMacosScutilProxyOutput(`
+<dictionary> {
+  ExceptionsList : <array> {
+    0 : *
+    1 : <local>
+  }
+  HTTPEnable : 1
+  HTTPPort : 7890
+  HTTPProxy : 127.0.0.1
+}
+`);
+
+    expect(env.NO_PROXY).toBe("*");
+    expect(env.no_proxy).toBe("*");
+  });
+
   it("preserves a wildcard Windows bypass list", () => {
     const env = parseWindowsInternetSettingsProxyOutput({
       proxyEnable: `
@@ -240,6 +257,25 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settin
       proxyOverride: `
 HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
     ProxyOverride    REG_SZ    *
+`,
+    });
+
+    expect(env.NO_PROXY).toBe("*");
+  });
+
+  it("preserves a wildcard Windows bypass list when other entries are present", () => {
+    const env = parseWindowsInternetSettingsProxyOutput({
+      proxyEnable: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyEnable    REG_DWORD    0x1
+`,
+      proxyServer: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyServer    REG_SZ    http=10.0.0.2:8080
+`,
+      proxyOverride: `
+HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings
+    ProxyOverride    REG_SZ    *;<local>
 `,
     });
 

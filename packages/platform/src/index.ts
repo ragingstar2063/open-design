@@ -195,7 +195,7 @@ function buildNoProxyValue(tokens: Iterable<string>): string | null {
 }
 
 function preserveWildcardNoProxyValue(noProxy: string | null | undefined): string | undefined {
-  return noProxy?.trim() === "*" ? "*" : undefined;
+  return noProxy?.split(",").some((token) => token.trim() === "*") ? "*" : undefined;
 }
 
 function normalizeProxyUrl(raw: string, scheme: string): string | null {
