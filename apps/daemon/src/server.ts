@@ -1916,6 +1916,53 @@ export function __forTestResolveRunProjectKindForAnalytics(args) {
   return resolveRunProjectKindForAnalytics(args);
 }
 
+// Scans run.events newest→oldest to extract usage token counts and the
+// agent-reported model name. The scan must not short-circuit on usage
+// before reaching the model signal: usage is a terminal event while
+// status:initializing/model is emitted at the very start of the run, so
+// in reverse iteration usage is seen first. The loop continues until both
+// usage tokens are found AND (the caller already has a model from reqBody
+// OR the agent-reported model has been found).
+function scanRunEventsForFinishedProps(events, reqBodyModel) {
+  let inputTokens;
+  let outputTokens;
+  let agentReportedModel = null;
+  const needAgentModel = !(typeof reqBodyModel === 'string' && reqBodyModel.trim());
+  let haveUsageTokens = false;
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    const data = ev?.data;
+    if (ev?.event === 'agent' && data?.type === 'usage' && data.usage) {
+      const u = data.usage;
+      if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
+      if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
+      if (inputTokens !== undefined || outputTokens !== undefined) haveUsageTokens = true;
+    }
+    if (
+      !agentReportedModel &&
+      ev?.event === 'agent' &&
+      data?.type === 'status' &&
+      (data.label === 'model' || data.label === 'initializing')
+    ) {
+      const candidate =
+        typeof data.model === 'string'
+          ? data.model
+          : typeof data.detail === 'string'
+            ? data.detail
+            : null;
+      if (candidate && candidate.trim()) {
+        agentReportedModel = candidate.trim();
+      }
+    }
+    if (haveUsageTokens && (!needAgentModel || agentReportedModel)) break;
+  }
+  return { inputTokens, outputTokens, agentReportedModel };
+}
+
+export function __forTestScanRunEventsForFinishedProps(events, reqBodyModel) {
+  return scanRunEventsForFinishedProps(events, reqBodyModel);
+}
+
 function githubRepoNameFromPluginName(name) {
   const slug = String(name)
     .toLowerCase()
@@ -12638,54 +12685,13 @@ export async function startServer({
         // child close without error event, etc.).
         const result = runResultFromStatus(status.status);
         const errorCode = deriveRunErrorCode(status);
-        let inputTokens: number | undefined;
-        let outputTokens: number | undefined;
-        // Look for an agent-reported model on the run's `status` events.
-        // ACP sends `{ type:'status', label:'model', model:<id> }` after
-        // session/new (`apps/daemon/src/acp.ts`), and the various stream
-        // adapters emit `{ type:'status', label:'initializing', model:<id> }`
-        // (`claude-stream.ts`, `copilot-stream.ts`, `json-event-stream.ts`,
-        // etc.). Either signal beats the request-side `reqBody.model`
-        // because it's what the agent actually selected — including the
-        // case where the user didn't pick a model and the agent picked
-        // its own default. We only upgrade when `reqBody.model` is empty;
-        // an explicit user choice always wins.
-        let agentReportedModel: string | null = null;
-        for (let i = run.events.length - 1; i >= 0; i -= 1) {
-          const ev = run.events[i];
-          const data = ev?.data as
-            | {
-                type?: string;
-                label?: string;
-                model?: unknown;
-                detail?: unknown;
-                usage?: Record<string, unknown> | null;
-              }
-            | null
-            | undefined;
-          if (ev?.event === 'agent' && data?.type === 'usage' && data.usage) {
-            const u = data.usage;
-            if (typeof u.input_tokens === 'number') inputTokens = u.input_tokens;
-            if (typeof u.output_tokens === 'number') outputTokens = u.output_tokens;
-            if (inputTokens !== undefined || outputTokens !== undefined) break;
-          }
-          if (
-            !agentReportedModel &&
-            ev?.event === 'agent' &&
-            data?.type === 'status' &&
-            (data.label === 'model' || data.label === 'initializing')
-          ) {
-            const candidate =
-              typeof data.model === 'string'
-                ? data.model
-                : typeof data.detail === 'string'
-                  ? data.detail
-                  : null;
-            if (candidate && candidate.trim()) {
-              agentReportedModel = candidate.trim();
-            }
-          }
-        }
+        // ACP reports { type:'status', label:'model', model:<id> } after
+        // session/new; stream adapters report { type:'status',
+        // label:'initializing', model:<id> } at run start. The scan must
+        // not short-circuit on usage before reaching the model signal —
+        // see `scanRunEventsForFinishedProps` for the invariant.
+        const { inputTokens, outputTokens, agentReportedModel } =
+          scanRunEventsForFinishedProps(run.events, reqBody.model);
         const haveUsage = inputTokens !== undefined || outputTokens !== undefined;
         const totalTokens =
           inputTokens !== undefined && outputTokens !== undefined
