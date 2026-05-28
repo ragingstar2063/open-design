@@ -359,8 +359,8 @@ try {
 
   $outputNamespaceRoot = Join-Path $toolsPackDir "out\win\namespaces\$Namespace"
   $runtimeNamespaceRoot = Join-Path $toolsPackDir "runtime\win\namespaces\$Namespace"
-  Measure-Step "pre-clean namespace roots" {
-    Remove-Item -LiteralPath $outputNamespaceRoot, $runtimeNamespaceRoot -Recurse -Force -ErrorAction SilentlyContinue
+  Measure-Step "pre-clean runtime root" {
+    Remove-Item -LiteralPath $runtimeNamespaceRoot -Recurse -Force -ErrorAction SilentlyContinue
   }
 
   $buildArgs = @(

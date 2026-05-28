@@ -346,7 +346,11 @@ export async function runElectronBuilder(
   const cachedUnpackedRoot = join(cachedBuilderRoot, "win-unpacked");
   const cachedExecutablePath = join(cachedUnpackedRoot, `${PRODUCT_NAME}.exe`);
   await runSegment("electron-builder-dir:prepare-namespace", async () => {
-    await removeTree(paths.appBuilderOutputRoot);
+    if (shouldBuildWinNsisInstaller(config.to) || shouldBuildWinPortableZip(config.to)) {
+      await mkdir(paths.appBuilderOutputRoot, { recursive: true });
+    } else {
+      await removeTree(paths.appBuilderOutputRoot);
+    }
     await writePackagedConfig(config, paths, packagedVersion, packagedConfigEntrypoints);
   });
   await runSegment("electron-builder-dir:materialize-audit", async () => {
