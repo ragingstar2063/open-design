@@ -180,7 +180,7 @@ function addProxyEnvValue(
 function normalizeBypassToken(token: string): string[] {
   const trimmed = token.trim();
   if (!trimmed) return [];
-  if (trimmed === "<local>") return ["localhost", "127.0.0.1", "[::1]", ".local"];
+  if (trimmed === "<local>") return ["<local>", "localhost", "127.0.0.1", "[::1]", ".local"];
   if (trimmed === "::1") return ["[::1]"];
   if (trimmed.startsWith("*.")) return [`.${trimmed.slice(2)}`];
   return [trimmed];

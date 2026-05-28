@@ -231,7 +231,7 @@ HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settin
       HTTP_PROXY: "http://10.0.0.2:8080",
       HTTPS_PROXY: "http://10.0.0.3:8443",
       ALL_PROXY: "socks5://10.0.0.4:1080",
-      NO_PROXY: "localhost,127.0.0.1,[::1],.local,.corp",
+      NO_PROXY: "localhost,<local>,127.0.0.1,[::1],.local,.corp",
       NODE_USE_ENV_PROXY: "1",
     });
   });

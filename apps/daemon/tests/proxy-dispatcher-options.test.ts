@@ -2,6 +2,7 @@ import * as platform from '@open-design/platform';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const envHttpProxyAgentConstructor = vi.fn();
+const envHttpProxyAgentDispatch = vi.fn();
 const directAgentConstructor = vi.fn();
 const socks5ProxyAgentConstructor = vi.fn();
 const directAgentDispatch = vi.fn();
@@ -14,7 +15,14 @@ vi.mock('undici', async () => {
       envHttpProxyAgentConstructor(options);
     }
 
+    dispatch(options: unknown, handler: unknown) {
+      envHttpProxyAgentDispatch(options, handler);
+      return true;
+    }
+
     async close() {}
+
+    async destroy() {}
   }
 
   class MockAgent {
@@ -60,6 +68,7 @@ describe('proxyDispatcherRequestInit', () => {
     directAgentConstructor.mockReset();
     directAgentDispatch.mockReset();
     envHttpProxyAgentConstructor.mockReset();
+    envHttpProxyAgentDispatch.mockReset();
     socks5ProxyAgentDispatch.mockReset();
     socks5ProxyAgentConstructor.mockReset();
     vi.resetModules();
@@ -231,6 +240,35 @@ describe('proxyDispatcherRequestInit', () => {
       );
       expect(socks5ProxyAgentDispatch).toHaveBeenCalled();
       expect(directAgentDispatch).not.toHaveBeenCalled();
+      await expect(close()).resolves.toBeUndefined();
+    } finally {
+      proxySpy.mockRestore();
+    }
+  });
+
+  it('bypasses HTTP proxy dispatch for simple hosts when NO_PROXY includes <local>', async () => {
+    const proxySpy = vi.spyOn(platform, 'resolveSystemProxyEnv').mockReturnValue({});
+    const { proxyDispatcherRequestInit } = await import('../src/connectionTest.js');
+
+    try {
+      const { close, requestInit } = proxyDispatcherRequestInit({
+        HTTP_PROXY: 'http://proxy.example.test:8080',
+        NO_PROXY: '<local>,localhost,127.0.0.1,[::1],.local',
+      });
+
+      expect(requestInit.dispatcher).toBeTruthy();
+      const dispatcher = requestInit.dispatcher as {
+        dispatch(options: { origin: string; path: string }, handler: unknown): boolean;
+      };
+      dispatcher.dispatch(
+        {
+          origin: 'http://ollama:11434',
+          path: '/api/tags',
+        },
+        {},
+      );
+      expect(directAgentDispatch).toHaveBeenCalled();
+      expect(envHttpProxyAgentDispatch).not.toHaveBeenCalled();
       await expect(close()).resolves.toBeUndefined();
     } finally {
       proxySpy.mockRestore();
