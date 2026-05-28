@@ -357,6 +357,9 @@ winDescribe('packaged windows runtime smoke', () => {
     const timings: SmokeTiming[] = [];
     let violentUpdater: ViolentUpdaterSummary | { skipped: true } = { skipped: true };
     let realUpdateInstaller: RealUpdateInstallerSummary | { skipped: true } = { skipped: true };
+    let popup: UpdaterPopupEvalValue | { skipped: true } = { skipped: true };
+    let updateStatus: WinInspectResult['update'] | { skipped: true } = { skipped: true };
+    let updateInstall: WinInspectResult['update'] | { skipped: true } = { skipped: true };
     try {
       await measureSmokeStep(timings, 'pre-clean uninstall', async () => {
         await runToolsPackJson<WinUninstallResult>('uninstall', ['--remove-product-user-data']).catch(() => null);
@@ -458,37 +461,41 @@ winDescribe('packaged windows runtime smoke', () => {
         });
       }
 
-      const fixtureInfo = updaterFixture?.info;
-      if (fixtureInfo == null) throw new Error('updater fixture was not initialized');
-      const popup = await measureSmokeStep(timings, 'open ready updater prompt', async () =>
-        openReadyUpdaterPrompt(fixtureInfo.version),
-      );
-      expect(popup.visible).toBe(true);
-      expect(popup.title).toEqual(expect.any(String));
-      expect(popup.title?.trim().length).toBeGreaterThan(0);
-      expect(popup.installButtonVisible).toBe(true);
-      expect(popup.text ?? '').toContain(updaterFixture.info.version);
+      if (verifyViolentUpdater || verifyRealUpdateInstaller) {
+        const fixtureInfo = updaterFixture?.info;
+        if (fixtureInfo == null) throw new Error('updater fixture was not initialized');
+        popup = await measureSmokeStep(timings, 'open ready updater prompt', async () =>
+          openReadyUpdaterPrompt(fixtureInfo.version),
+        );
+        expect(popup.visible).toBe(true);
+        expect(popup.title).toEqual(expect.any(String));
+        expect(popup.title?.trim().length).toBeGreaterThan(0);
+        expect(popup.installButtonVisible).toBe(true);
+        expect(popup.text ?? '').toContain(updaterFixture.info.version);
 
-      const updateStatus = await measureSmokeStep(timings, 'inspect updater status', async () =>
-        runToolsPackJson<WinInspectResult>('inspect', ['--update-action', 'status']),
-      );
-      expect(updateStatus.update?.state).toBe('downloaded');
-      expect(updateStatus.update?.channel).toBe(updateScenario.channel);
-      expect(updateStatus.update?.currentVersion).toBe(updateScenario.expectedCurrentVersion);
-      expect(updateStatus.update?.availableVersion).toBe(updaterFixture.info.version);
-      expectPathInside(updateStatus.update?.downloadPath ?? '', expectedUpdateRoot);
+        const updateStatusInspect = await measureSmokeStep(timings, 'inspect updater status', async () =>
+          runToolsPackJson<WinInspectResult>('inspect', ['--update-action', 'status']),
+        );
+        updateStatus = updateStatusInspect.update;
+        expect(updateStatusInspect.update?.state).toBe('downloaded');
+        expect(updateStatusInspect.update?.channel).toBe(updateScenario.channel);
+        expect(updateStatusInspect.update?.currentVersion).toBe(updateScenario.expectedCurrentVersion);
+        expect(updateStatusInspect.update?.availableVersion).toBe(updaterFixture.info.version);
+        expectPathInside(updateStatusInspect.update?.downloadPath ?? '', expectedUpdateRoot);
 
-      const clickInstall = await measureSmokeStep(timings, 'click updater installer', async () =>
-        runToolsPackJson<WinInspectResult>('inspect', ['--expr', clickUpdaterInstallExpression]),
-      );
-      const clickValue = assertUpdaterClickEvalValue(clickInstall.eval?.value);
-      expect(clickValue.clicked).toBe(true);
-      const updateInstall = await measureSmokeStep(timings, 'wait updater installer opened', async () =>
-        waitForUpdaterInstallerOpened(),
-      );
-      expect(updateInstall.update?.state).toBe('downloaded');
-      expect(updateInstall.update?.installResult?.dryRun).toBe(true);
-      expectPathInside(updateInstall.update?.installResult?.path ?? '', expectedUpdateRoot);
+        const clickInstall = await measureSmokeStep(timings, 'click updater installer', async () =>
+          runToolsPackJson<WinInspectResult>('inspect', ['--expr', clickUpdaterInstallExpression]),
+        );
+        const clickValue = assertUpdaterClickEvalValue(clickInstall.eval?.value);
+        expect(clickValue.clicked).toBe(true);
+        const updateInstallInspect = await measureSmokeStep(timings, 'wait updater installer opened', async () =>
+          waitForUpdaterInstallerOpened(),
+        );
+        updateInstall = updateInstallInspect.update;
+        expect(updateInstallInspect.update?.state).toBe('downloaded');
+        expect(updateInstallInspect.update?.installResult?.dryRun).toBe(true);
+        expectPathInside(updateInstallInspect.update?.installResult?.path ?? '', expectedUpdateRoot);
+      }
 
       if (verifyRealUpdateInstaller) {
         realUpdateInstaller = await measureSmokeStep(timings, 'real public update installer acceptance', async () =>
@@ -586,9 +593,9 @@ winDescribe('packaged windows runtime smoke', () => {
         timings,
         uninstall,
         update: {
-          install: updateInstall.update,
+          install: updateInstall,
           popup,
-          status: updateStatus.update,
+          status: updateStatus,
           violent: violentUpdater,
         },
       });

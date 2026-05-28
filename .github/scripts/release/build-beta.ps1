@@ -423,6 +423,7 @@ try {
   $env:OD_PACKAGED_E2E_TOOLS_PACK_DIR = $toolsPackDir
 
   Measure-Step "release smoke win" {
+    Remove-Item -LiteralPath $env:OD_PACKAGED_E2E_REPORT_DIR -Recurse -Force -ErrorAction SilentlyContinue
     Invoke-Node24 -Arguments @("pnpm.cmd", "exec", "tsx", "scripts/release-smoke.ts", "win", "specs/win.spec.ts") -WorkingDirectory (Join-Path $workspaceRoot "e2e")
   }
 
