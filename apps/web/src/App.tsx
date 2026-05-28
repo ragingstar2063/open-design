@@ -693,19 +693,22 @@ export function App() {
   const handleWorkspaceInviteAccepted = useCallback(async (result: AcceptWorkspaceInviteResponse) => {
     const requestId = workspaceSelectionRequestRef.current + 1;
     workspaceSelectionRequestRef.current = requestId;
+    const dataRequestId = workspaceDataRequestRef.current + 1;
+    workspaceDataRequestRef.current = dataRequestId;
     const previousWorkspaceId = currentWorkspaceIdRef.current;
+    setProjectsLoading(true);
     const selected = await setCurrentWorkspace(result.workspace.id);
-    if (requestId !== workspaceSelectionRequestRef.current) return;
+    if (requestId !== workspaceSelectionRequestRef.current || dataRequestId !== workspaceDataRequestRef.current) return;
     if (!selected) {
+      setProjectsLoading(false);
       throw new Error('Could not switch to the invited workspace.');
     }
     const nextWorkspaceId = selected.workspaces.some((workspace) => workspace.id === selected.currentWorkspaceId)
       ? selected.currentWorkspaceId
       : result.workspace.id;
-    setProjectsLoading(true);
     try {
       const workspaceData = await fetchWorkspaceDataFor(nextWorkspaceId);
-      if (requestId !== workspaceSelectionRequestRef.current) return;
+      if (requestId !== workspaceSelectionRequestRef.current || dataRequestId !== workspaceDataRequestRef.current) return;
       setWorkspaces(selected.workspaces);
       setCurrentUserId(selected.currentUserId);
       setCurrentWorkspaceId(nextWorkspaceId);
@@ -714,7 +717,7 @@ export function App() {
       setWorkspaceLoadError(null);
       setProjectsLoading(false);
     } catch (err) {
-      if (requestId === workspaceSelectionRequestRef.current) {
+      if (requestId === workspaceSelectionRequestRef.current && dataRequestId === workspaceDataRequestRef.current) {
         void setCurrentWorkspace(previousWorkspaceId);
         setWorkspaceLoadError(messageFromError(err, 'Could not load workspace projects.'));
         setProjectsLoading(false);
@@ -737,20 +740,23 @@ export function App() {
   const handleWorkspaceChange = useCallback(async (workspaceId: string) => {
     const requestId = workspaceSelectionRequestRef.current + 1;
     workspaceSelectionRequestRef.current = requestId;
+    const dataRequestId = workspaceDataRequestRef.current + 1;
+    workspaceDataRequestRef.current = dataRequestId;
     const previousWorkspaceId = currentWorkspaceIdRef.current;
+    setProjectsLoading(true);
     const selected = await setCurrentWorkspace(workspaceId);
-    if (requestId !== workspaceSelectionRequestRef.current) return;
+    if (requestId !== workspaceSelectionRequestRef.current || dataRequestId !== workspaceDataRequestRef.current) return;
     if (!selected) {
+      setProjectsLoading(false);
       throw new Error('Could not switch workspace.');
     }
     const next = selected;
     const nextWorkspaceId = next.workspaces.some((workspace) => workspace.id === next.currentWorkspaceId)
       ? next.currentWorkspaceId
       : next.workspaces[0]?.id ?? 'local-personal';
-    setProjectsLoading(true);
     try {
       const workspaceData = await fetchWorkspaceDataFor(nextWorkspaceId);
-      if (requestId !== workspaceSelectionRequestRef.current) return;
+      if (requestId !== workspaceSelectionRequestRef.current || dataRequestId !== workspaceDataRequestRef.current) return;
       setWorkspaces(next.workspaces);
       setCurrentUserId(next.currentUserId);
       setCurrentWorkspaceId(nextWorkspaceId);
@@ -759,7 +765,7 @@ export function App() {
       setWorkspaceLoadError(null);
       setProjectsLoading(false);
     } catch (err) {
-      if (requestId === workspaceSelectionRequestRef.current) {
+      if (requestId === workspaceSelectionRequestRef.current && dataRequestId === workspaceDataRequestRef.current) {
         void setCurrentWorkspace(previousWorkspaceId);
         setWorkspaceLoadError(messageFromError(err, 'Could not load workspace projects.'));
         setProjectsLoading(false);

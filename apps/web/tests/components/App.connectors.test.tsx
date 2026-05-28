@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/App';
-import type { AppConfig } from '../../src/types';
+import type { AppConfig, Project } from '../../src/types';
 import {
   fetchDaemonConfig,
   fetchComposioConfigFromDaemon,
@@ -40,6 +40,7 @@ vi.mock('../../src/components/EntryView', () => ({
     onProjectsRefresh,
     onPersistComposioKey,
     projectsLoading,
+    projects,
   }: {
     config: AppConfig;
     currentWorkspaceId: string;
@@ -48,10 +49,12 @@ vi.mock('../../src/components/EntryView', () => ({
     onProjectsRefresh: () => Promise<void>;
     onPersistComposioKey: (composio: AppConfig['composio']) => void;
     projectsLoading?: boolean;
+    projects?: Project[];
   }) => (
     <div>
       <div>Current workspace: {currentWorkspaceId}</div>
       <div>Projects loading: {projectsLoading ? 'loading' : 'idle'}</div>
+      <div>Projects: {(projects ?? []).map((project) => project.name).join(', ') || 'none'}</div>
       <button type="button" onClick={() => { void onWorkspaceChange('team-ws').catch(() => {}); }}>
         Switch team workspace
       </button>
@@ -390,6 +393,97 @@ describe('App connectors settings flows', () => {
       expect(screen.getByText('team projects unavailable')).toBeTruthy();
     });
     expect(workspaceSwitches).toEqual(['team-ws', 'local-personal']);
+  });
+
+  it('ignores stale workspace data after a later workspace switch commits', async () => {
+    const workspaceResponse = {
+      workspaces: [
+        {
+          id: 'local-personal',
+          name: 'Personal Workspace',
+          kind: 'local',
+          currentUserRole: 'owner',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        {
+          id: 'team-ws',
+          name: 'Team Workspace',
+          kind: 'team',
+          currentUserRole: 'admin',
+          createdAt: 2,
+          updatedAt: 2,
+        },
+      ],
+      currentWorkspaceId: 'local-personal',
+      currentUserId: 'local-user',
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url === '/api/workspaces' && (!init || init.method == null || init.method === 'GET')) {
+          return new Response(JSON.stringify(workspaceResponse), { status: 200 });
+        }
+        if (url === '/api/workspaces/current') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { workspaceId?: string };
+          return new Response(JSON.stringify({
+            ...workspaceResponse,
+            currentWorkspaceId: body.workspaceId ?? 'local-personal',
+          }), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 200 });
+      }),
+    );
+    let resolveLocalProjects: (projects: Project[]) => void = () => {};
+    mockedListProjects.mockImplementation(async (workspaceId?: string) => {
+      if (workspaceId === 'local-personal') {
+        return await new Promise<Project[]>((resolve) => {
+          resolveLocalProjects = resolve;
+        });
+      }
+      if (workspaceId === 'team-ws') {
+        return [{
+          id: 'team-project',
+          workspaceId: 'team-ws',
+          name: 'Team project',
+          skillId: null,
+          designSystemId: null,
+          createdAt: 2,
+          updatedAt: 2,
+        }];
+      }
+      return [];
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Current workspace: local-personal')).toBeTruthy();
+    await waitFor(() => {
+      expect(mockedListProjects).toHaveBeenCalledWith('local-personal');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch team workspace' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Current workspace: team-ws')).toBeTruthy();
+      expect(screen.getByText('Projects: Team project')).toBeTruthy();
+    });
+
+    resolveLocalProjects([{
+      id: 'local-project',
+      workspaceId: 'local-personal',
+      name: 'Local stale project',
+      skillId: null,
+      designSystemId: null,
+      createdAt: 1,
+      updatedAt: 1,
+    }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(screen.getByText('Current workspace: team-ws')).toBeTruthy();
+    expect(screen.getByText('Projects: Team project')).toBeTruthy();
+    expect(screen.queryByText('Projects: Local stale project')).toBeNull();
   });
 
   it('does not show first-run privacy consent until daemon config hydration finishes', async () => {
