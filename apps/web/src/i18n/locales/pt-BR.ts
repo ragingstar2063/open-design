@@ -643,7 +643,7 @@ export const ptBR: Dict = {
   'designs.subYours': 'Seus designs',
   'designs.filterAria': 'Filtrar projetos',
   'designs.searchPlaceholder': 'Buscar…',
-  'designs.emptyNoProjects': 'Ainda não há projetos. Crie um à esquerda.',
+  'designs.emptyNoProjects': 'Ainda não há projetos.',
   'designs.emptyNoMatch': 'Nenhum projeto corresponde à sua busca.',
   'designs.deleteTitle': 'Excluir projeto',
   'designs.deleteConfirm': 'Excluir "{name}"?',

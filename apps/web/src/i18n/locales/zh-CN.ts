@@ -1209,7 +1209,7 @@ export const zhCN: Dict = {
   'designs.subYours': '我的设计',
   'designs.filterAria': '筛选项目',
   'designs.searchPlaceholder': '搜索…',
-  'designs.emptyNoProjects': '还没有项目。请在左侧创建一个。',
+  'designs.emptyNoProjects': '还没有项目。',
   'designs.emptyNoMatch': '没有匹配的项目。',
   'designs.deleteTitle': '删除项目',
   'designs.deleteConfirm': '确定删除「{name}」？',

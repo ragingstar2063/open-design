@@ -631,7 +631,7 @@ export const ko: Dict = {
   'designs.subYours': '내 디자인',
   'designs.filterAria': '프로젝트 필터링',
   'designs.searchPlaceholder': '검색…',
-  'designs.emptyNoProjects': '아직 프로젝트가 없습니다. 왼쪽에서 새 프로젝트를 생성하세요.',
+  'designs.emptyNoProjects': '아직 프로젝트가 없습니다.',
   'designs.emptyNoMatch': '검색어와 일치하는 프로젝트가 없습니다.',
   'designs.deleteTitle': '프로젝트 삭제',
   'designs.deleteConfirm': '"{name}" 프로젝트를 삭제하시겠습니까?',

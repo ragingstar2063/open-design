@@ -519,7 +519,7 @@ export const de: Dict = {
   'designs.subYours': 'Ihre Designs',
   'designs.filterAria': 'Projekte filtern',
   'designs.searchPlaceholder': 'Suchen…',
-  'designs.emptyNoProjects': 'Noch keine Projekte. Erstellen Sie links eines.',
+  'designs.emptyNoProjects': 'Noch keine Projekte.',
   'designs.emptyNoMatch': 'Keine Projekte passen zu Ihrer Suche.',
   'designs.deleteTitle': 'Projekt löschen',
   'designs.deleteConfirm': '„{name}“ löschen?',

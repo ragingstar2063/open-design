@@ -644,7 +644,7 @@ export const fa: Dict = {
   'designs.subYours': 'طرح‌های شما',
   'designs.filterAria': 'فیلتر پروژه‌ها',
   'designs.searchPlaceholder': 'جستجو…',
-  'designs.emptyNoProjects': 'هنوز هیچ پروژه‌ای وجود ندارد. یکی را از سمت چپ ایجاد کنید.',
+  'designs.emptyNoProjects': 'هنوز هیچ پروژه‌ای وجود ندارد.',
   'designs.emptyNoMatch': 'هیچ پروژه‌ای با جستجوی شما مطابقت ندارد.',
   'designs.deleteTitle': 'حذف پروژه',
   'designs.deleteConfirm': 'آیا «{name}» حذف شود؟',

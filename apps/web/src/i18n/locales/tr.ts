@@ -620,7 +620,7 @@ export const tr: Dict = {
   'designs.subYours': 'Tasarımların',
   'designs.filterAria': 'Projeleri filtrele',
   'designs.searchPlaceholder': 'Ara…',
-  'designs.emptyNoProjects': 'Henüz proje yok. Sol taraftan yeni bir tane oluşturun.',
+  'designs.emptyNoProjects': 'Henüz proje yok.',
   'designs.emptyNoMatch': 'Hiçbir proje aramanızla örtüşmedi.',
   'designs.deleteTitle': 'Projeyi sil',
   'designs.deleteConfirm': '"{name}"’i sil?',

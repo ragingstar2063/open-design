@@ -520,7 +520,7 @@ export const esES: Dict = {
   'designs.subYours': 'Tus diseños',
   'designs.filterAria': 'Filtrar proyectos',
   'designs.searchPlaceholder': 'Buscar…',
-  'designs.emptyNoProjects': 'Aún no hay proyectos. Crea uno a la izquierda.',
+  'designs.emptyNoProjects': 'Aún no hay proyectos.',
   'designs.emptyNoMatch': 'Ningún proyecto coincide con tu búsqueda.',
   'designs.deleteTitle': 'Eliminar proyecto',
   'designs.deleteConfirm': '¿Eliminar «{name}»?',

@@ -643,7 +643,7 @@ export const ru: Dict = {
   'designs.subYours': 'Ваши дизайны',
   'designs.filterAria': 'Фильтр проектов',
   'designs.searchPlaceholder': 'Поиск…',
-  'designs.emptyNoProjects': 'Проектов пока нет. Создайте один слева.',
+  'designs.emptyNoProjects': 'Проектов пока нет.',
   'designs.emptyNoMatch': 'Нет проектов, соответствующих вашему поиску.',
   'designs.deleteTitle': 'Удалить проект',
   'designs.deleteConfirm': 'Удалить «{name}»?',

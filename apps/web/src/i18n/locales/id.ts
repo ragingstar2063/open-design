@@ -735,7 +735,7 @@ export const id: Dict = {
   'designs.subYours': 'Desainmu',
   'designs.filterAria': 'Filter proyek',
   'designs.searchPlaceholder': 'Cari...',
-  'designs.emptyNoProjects': 'Belum ada proyek. Buat satu dari panel kiri.',
+  'designs.emptyNoProjects': 'Belum ada proyek.',
   'designs.emptyNoMatch': 'Tidak ada proyek yang cocok dengan pencarianmu.',
   'designs.deleteTitle': 'Hapus proyek',
   'designs.deleteConfirm': 'Hapus "{name}"?',

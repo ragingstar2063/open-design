@@ -631,7 +631,7 @@ export const ar: Dict = {
   'designs.subYours': 'تصاميمك',
   'designs.filterAria': 'تصفية المشاريع',
   'designs.searchPlaceholder': 'بحث...',
-  'designs.emptyNoProjects': 'لا توجد مشاريع بعد. أنشئ واحداً على اليسار.',
+  'designs.emptyNoProjects': 'لا توجد مشاريع بعد.',
   'designs.emptyNoMatch': 'لا توجد مشاريع تطابق بحثك.',
   'designs.deleteTitle': 'حذف المشروع',
   'designs.deleteConfirm': 'هل تريد حذف "{name}"؟',

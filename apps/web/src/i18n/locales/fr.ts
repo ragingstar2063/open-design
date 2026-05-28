@@ -1162,7 +1162,7 @@ export const fr: Dict = {
   'designs.subYours': 'Vos designs',
   'designs.filterAria': 'Filtrer les projets',
   'designs.searchPlaceholder': 'Rechercher…',
-  'designs.emptyNoProjects': 'Aucun projet pour l\'instant. Créez-en un à gauche.',
+  'designs.emptyNoProjects': 'Aucun projet pour l\'instant.',
   'designs.emptyNoMatch': 'Aucun projet ne correspond à votre recherche.',
   'designs.deleteTitle': 'Supprimer le projet',
   'designs.deleteConfirm': 'Supprimer « {name} » ?',
