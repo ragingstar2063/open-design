@@ -7,7 +7,7 @@ param(
   [string]$Root = "",
   [string]$ReleaseVersion = "",
   [string]$MetadataUrl = "https://releases.open-design.ai/beta/latest/metadata.json",
-  [ValidateSet("full", "fast")]
+  [ValidateSet("full", "fast", "core")]
   [string]$SmokeMode = "full",
   [ValidateSet("all", "dir", "nsis", "zip")]
   [string]$Target = "all",
@@ -456,7 +456,8 @@ try {
   $env:OD_PACKAGED_E2E_BUILD_JSON_PATH = $buildJsonPath
   $env:OD_PACKAGED_E2E_WIN = "1"
   $env:OD_PACKAGED_E2E_WIN_VERIFY_REINSTALL = "0"
-  $env:OD_PACKAGED_E2E_WIN_UPDATER_VIOLENT = if ($SmokeMode -eq "fast") { "0" } else { "1" }
+  $env:OD_PACKAGED_E2E_WIN_SMOKE_PROFILE = $SmokeMode
+  $env:OD_PACKAGED_E2E_WIN_UPDATER_VIOLENT = if ($SmokeMode -eq "full") { "1" } else { "0" }
   $env:OD_PACKAGED_E2E_NAMESPACE = $Namespace
   $env:OD_PACKAGED_E2E_RELEASE_CHANNEL = "beta"
   $env:OD_PACKAGED_E2E_RELEASE_VERSION = $ReleaseVersion

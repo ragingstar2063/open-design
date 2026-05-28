@@ -28,6 +28,8 @@ const namespace = process.env.OD_PACKAGED_E2E_NAMESPACE ?? 'release-beta-win';
 const toolsPackBin = join(workspaceRoot, 'tools', 'pack', 'bin', 'tools-pack.mjs');
 const toolsServeBin = join(workspaceRoot, 'tools', 'serve', 'bin', 'tools-serve.mjs');
 const maxInstallDurationMs = Number.parseInt(process.env.OD_PACKAGED_E2E_WIN_MAX_INSTALL_MS ?? '120000', 10);
+const smokeProfile = process.env.OD_PACKAGED_E2E_WIN_SMOKE_PROFILE ?? 'full';
+const verifyCoreOnly = smokeProfile === 'core';
 const verifyReinstallWhileRunning = process.env.OD_PACKAGED_E2E_WIN_VERIFY_REINSTALL !== '0';
 const verifyViolentUpdater = process.env.OD_PACKAGED_E2E_WIN_UPDATER_VIOLENT !== '0';
 const verifyRealUpdateInstaller = process.env.OD_PACKAGED_E2E_WIN_REAL_UPDATE_INSTALL === '1';
@@ -360,6 +362,8 @@ winDescribe('packaged windows runtime smoke', () => {
     let popup: UpdaterPopupEvalValue | { skipped: true } = { skipped: true };
     let updateStatus: WinInspectResult['update'] | { skipped: true } = { skipped: true };
     let updateInstall: WinInspectResult['update'] | { skipped: true } = { skipped: true };
+    let logs: LogsResult | { skipped: true } = { skipped: true };
+    let stop: WinStopResult | { skipped: true } = { skipped: true };
     try {
       await measureSmokeStep(timings, 'pre-clean uninstall', async () => {
         await runToolsPackJson<WinUninstallResult>('uninstall', ['--remove-product-user-data']).catch(() => null);
@@ -368,7 +372,9 @@ winDescribe('packaged windows runtime smoke', () => {
       const install = await measureSmokeStep(timings, 'install', async () => runToolsPackJson<WinInstallResult>('install'));
       installed = true;
       const expectedUpdateRoot = await resolveExpectedUpdateRoot(install.installDir);
-      await measureSmokeStep(timings, 'clear updater root', async () => clearUpdateRoot(expectedUpdateRoot));
+      if (!verifyCoreOnly) {
+        await measureSmokeStep(timings, 'clear updater root', async () => clearUpdateRoot(expectedUpdateRoot));
+      }
 
       expect(install.namespace).toBe(namespace);
       expectPathInside(install.installerPath, join(outputNamespaceRoot, 'builder'));
@@ -398,14 +404,16 @@ winDescribe('packaged windows runtime smoke', () => {
         );
       }
 
-      updaterFixture = verifyViolentUpdater
-        ? await startViolentUpdaterFixtureProcess(updateScenario, {
-            artifactBytes: violentArtifactBytes,
-            chunkDelayMs: violentChunkDelayMs,
-          })
-        : await startUpdaterFixtureProcess(updateScenario);
-      if (verifyViolentUpdater) applyManualPackagedUpdateEnv(process.env, updateScenario, updaterFixture.info.metadataUrl);
-      else applyPackagedUpdateEnv(process.env, updateScenario, updaterFixture.info.metadataUrl);
+      if (!verifyCoreOnly) {
+        updaterFixture = verifyViolentUpdater
+          ? await startViolentUpdaterFixtureProcess(updateScenario, {
+              artifactBytes: violentArtifactBytes,
+              chunkDelayMs: violentChunkDelayMs,
+            })
+          : await startUpdaterFixtureProcess(updateScenario);
+        if (verifyViolentUpdater) applyManualPackagedUpdateEnv(process.env, updateScenario, updaterFixture.info.metadataUrl);
+        else applyPackagedUpdateEnv(process.env, updateScenario, updaterFixture.info.metadataUrl);
+      }
       await seedPackagedOnboardingComplete(install.installDir);
 
       const startDesktop = async (step: string): Promise<WinStartResult> => {
@@ -471,7 +479,7 @@ winDescribe('packaged windows runtime smoke', () => {
         expect(popup.title).toEqual(expect.any(String));
         expect(popup.title?.trim().length).toBeGreaterThan(0);
         expect(popup.installButtonVisible).toBe(true);
-        expect(popup.text ?? '').toContain(updaterFixture.info.version);
+        expect(popup.text ?? '').toContain(fixtureInfo.version);
 
         const updateStatusInspect = await measureSmokeStep(timings, 'inspect updater status', async () =>
           runToolsPackJson<WinInspectResult>('inspect', ['--update-action', 'status']),
@@ -480,7 +488,7 @@ winDescribe('packaged windows runtime smoke', () => {
         expect(updateStatusInspect.update?.state).toBe('downloaded');
         expect(updateStatusInspect.update?.channel).toBe(updateScenario.channel);
         expect(updateStatusInspect.update?.currentVersion).toBe(updateScenario.expectedCurrentVersion);
-        expect(updateStatusInspect.update?.availableVersion).toBe(updaterFixture.info.version);
+        expect(updateStatusInspect.update?.availableVersion).toBe(fixtureInfo.version);
         expectPathInside(updateStatusInspect.update?.downloadPath ?? '', expectedUpdateRoot);
 
         const clickInstall = await measureSmokeStep(timings, 'click updater installer', async () =>
@@ -542,19 +550,22 @@ winDescribe('packaged windows runtime smoke', () => {
       expect(await fileSizeBytes(screenshotPath)).toBeGreaterThan(0);
       await report.saveScreenshot(screenshotPath);
 
-      const logs = await measureSmokeStep(timings, 'logs', async () => runToolsPackJson<LogsResult>('logs'));
-      assertLogPathsAndContent(logs);
+      if (!verifyCoreOnly) {
+        logs = await measureSmokeStep(timings, 'logs', async () => runToolsPackJson<LogsResult>('logs'));
+        assertLogPathsAndContent(logs);
 
-      const stop = await measureSmokeStep(timings, 'stop', async () => runToolsPackJson<WinStopResult>('stop'));
-      started = false;
-      expect(stop.namespace).toBe(namespace);
-      expect(stop.status).not.toBe('partial');
-      expect(stop.remainingPids).toEqual([]);
+        stop = await measureSmokeStep(timings, 'stop', async () => runToolsPackJson<WinStopResult>('stop'));
+        started = false;
+        expect(stop.namespace).toBe(namespace);
+        expect(stop.status).not.toBe('partial');
+        expect(stop.remainingPids).toEqual([]);
+      }
 
       const uninstall = await measureSmokeStep(timings, 'uninstall remove data', async () =>
         runToolsPackJson<WinUninstallResult>('uninstall', ['--remove-product-user-data']),
       );
       installed = false;
+      started = false;
       expect(uninstall.namespace).toBe(namespace);
       expect(uninstall.residueObservation?.managedProcessPids ?? []).toEqual([]);
       expect(uninstall.residueObservation?.productNamespaceRootExists).toBe(false);
@@ -577,7 +588,7 @@ winDescribe('packaged windows runtime smoke', () => {
         },
         installTiming,
         expectedUpdateRoot,
-        logs: summarizeLogs(logs),
+        logs: 'skipped' in logs ? logs : summarizeLogs(logs),
         namespace,
         realUpdateInstaller,
         reinstall,

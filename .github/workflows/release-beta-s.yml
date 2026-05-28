@@ -25,6 +25,7 @@ on:
         type: choice
         options:
           - fast
+          - core
           - full
         default: fast
       target:
