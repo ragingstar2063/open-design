@@ -5,10 +5,18 @@
  * uploads each to R2, updates mocks/manifest.json, and writes the
  * updated manifest back to R2.
  *
- * Not intended for local invocation. Requires CLOUDFLARE_API_TOKEN +
- * CLOUDFLARE_ACCOUNT_ID env. If you need to test the upload path
- * locally, configure wrangler with your own credentials AND set
+ * Not intended for local invocation. Talks to R2 via the S3-compatible
+ * API using AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY env (sourced from
+ * the CLOUDFLARE_R2_MOCKS_AK / _SK repo secrets). R2_S3_ENDPOINT must
+ * also be set. If you need to test the upload path locally, configure
+ * those env vars yourself AND set
  * env SYNCLO_OD_MOCKS_I_KNOW_WHAT_IM_DOING=1 to bypass the safety gate.
+ *
+ * Why not wrangler: wrangler 4.x calls /memberships before any R2
+ * action, which requires user:read scope. R2 "Object Read & Write"
+ * tokens deliberately lack that scope (defense in depth — a leaked
+ * token shouldn't enumerate account-level resources). aws CLI talks
+ * straight to the S3 endpoint with SigV4, no membership lookup.
  *
  * Atomic ordering:
  *   1. Validate every staging .jsonl (parse meta, sha256, size)
@@ -47,15 +55,19 @@ function checkEnv() {
     console.error('    SYNCLO_OD_MOCKS_I_KNOW_WHAT_IM_DOING=1 node mocks/scripts/upload-to-r2.mjs');
     process.exit(2);
   }
-  if (!process.env.CLOUDFLARE_API_TOKEN || !process.env.CLOUDFLARE_ACCOUNT_ID) {
-    console.error('✗ CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set.');
-    process.exit(2);
+  for (const k of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'R2_S3_ENDPOINT']) {
+    if (!process.env[k]) {
+      console.error(`✗ ${k} must be set.`);
+      process.exit(2);
+    }
   }
+  // aws CLI defaults to us-east-1, R2 wants "auto"; harmless to pin here.
+  if (!process.env.AWS_REGION) process.env.AWS_REGION = 'auto';
 }
 
-function wrangler(args) {
+function aws(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('wrangler', args, {
+    const child = spawn('aws', args, {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: process.env,
     });
@@ -65,13 +77,19 @@ function wrangler(args) {
     child.on('error', reject);
     child.on('exit', code => {
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`wrangler ${args.join(' ')} exit ${code}: ${stderr || stdout}`));
+      else reject(new Error(`aws ${args.slice(0, 3).join(' ')} exit ${code}: ${stderr || stdout}`));
     });
   });
 }
 
 async function uploadObject(localPath, key) {
-  await wrangler(['r2', 'object', 'put', `${BUCKET}/${key}`, '--file', localPath, '--remote']);
+  await aws([
+    's3api', 'put-object',
+    '--endpoint-url', process.env.R2_S3_ENDPOINT,
+    '--bucket', BUCKET,
+    '--key', key,
+    '--body', localPath,
+  ]);
 }
 
 async function gatherStaging() {

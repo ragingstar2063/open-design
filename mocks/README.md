@@ -315,11 +315,12 @@ can't race on the manifest.
 
 ### Why this trust model
 
-- **R2 write secret never leaves CI.** `CLOUDFLARE_R2_MOCKS_TOKEN` is
-  a repo secret with scope limited to the `open-design-mocks` bucket
-  (deliberately separate from the shared `CLOUDFLARE_API_TOKEN` used by
-  landing-page Pages deploys, so the R2 write capability stays narrow).
-  Local scripts have no path to call wrangler put.
+- **R2 write secret never leaves CI.** `CLOUDFLARE_R2_MOCKS_AK` +
+  `CLOUDFLARE_R2_MOCKS_SK` are repo secrets with scope limited to the
+  `open-design-mocks` bucket (deliberately separate from the shared
+  `CLOUDFLARE_API_TOKEN` used by landing-page Pages deploys and from
+  the `CLOUDFLARE_R2_RELEASES_*` pair, so the mocks write capability
+  stays narrow). Local scripts have no path to upload.
 - **No silent corruption.** Reviewer sees every byte of new data in the
   PR diff before it reaches R2.
 - **Read stays public.** Anyone can fetch via the r2.dev URL; only
