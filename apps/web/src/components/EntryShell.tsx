@@ -1576,8 +1576,10 @@ function OnboardingView({
     }
   }
 
-  const primaryActionLabel = step === 0 && amrSelectedAndSignedOut
-    ? t('settings.amrSignInToContinue')
+  const primaryActionLabel = step === 0 && amrLoginPending
+    ? t('settings.amrSigningIn')
+    : step === 0 && amrSelectedAndSignedOut
+      ? t('settings.amrSignInToContinue')
     : step === 1
       ? t('settings.onboardingContinue')
     : isLastStep
@@ -1911,6 +1913,11 @@ function OnboardingView({
 
           {step === 2 && renderDesignSystemCreation ? null : (
             <div className="onboarding-view__actions">
+              {step === 0 && amrLoginError ? (
+                <span className="onboarding-view__action-status is-error" role="alert">
+                  {t('settings.amrLoginErrorCompact')}
+                </span>
+              ) : null}
               <button
                 type="button"
                 className="onboarding-view__secondary"
