@@ -1872,6 +1872,57 @@ describe('SettingsDialog execution settings Local CLI interactions', () => {
     });
   });
 
+  // Laggy-onboarding regression: onboarding signs in and re-detects exactly
+  // once, so if that single call lands during vela's catalog-propagation
+  // window, Settings later mounts ALREADY signed in but with an empty model
+  // list. An edge-only (signed-out -> signed-in) trigger would never fire
+  // here, leaving the picker stuck on its loading row. Settings must chase the
+  // catalog on mount whenever AMR is signed in but has no models yet.
+  it('re-detects agents when Settings opens already signed in but the AMR model list is still empty', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url === '/api/memory') {
+        return new Response(
+          JSON.stringify({ enabled: true, memories: [], extraction: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (url === '/api/integrations/vela/status') {
+        return new Response(
+          JSON.stringify({
+            loggedIn: true,
+            loginInFlight: false,
+            profile: 'local',
+            user: { id: 'u1', email: 'amr@example.com' },
+            configPath: '/Users/test/.amr/config.json',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    // Signed in at mount, but the catalog hasn't arrived (empty model list).
+    const signedInEmptyAmr: AgentInfo = { ...amrAgent, models: [] };
+    const onRefreshAgents = vi.fn<OnRefreshAgents>(async () => [
+      { ...amrAgent, models: [{ id: 'glm-5.1', label: 'glm-5.1' }] },
+    ]);
+
+    renderSettingsDialog(
+      { mode: 'daemon', agentId: 'amr' },
+      { agents: [signedInEmptyAmr], onRefreshAgents },
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: /Local CLI.*1 installed/i }));
+
+    // No sign-in event is dispatched — the chase must fire from the mounted,
+    // already-signed-in-but-empty state.
+    await waitFor(() => {
+      expect(onRefreshAgents).toHaveBeenCalled();
+    });
+  });
+
   // The live `vela models` catalog lands a beat after sign-in. Rather than
   // leave the picker blank until then (the "appears seconds later" complaint),
   // the row renders immediately in a loading state.

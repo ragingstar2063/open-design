@@ -966,10 +966,9 @@ export function SettingsDialog({
   const providerTestAbortRef = useRef<AbortController | null>(null);
   const providerModelsAbortRef = useRef<AbortController | null>(null);
   const pendingAgentInstallRescanRef = useRef(false);
-  // Tracks the last observed AMR login state so we only re-detect agents on
-  // the signed-out -> signed-in edge (not on a mount that is already signed
-  // in, whose agent list was detected with the live catalog already present).
-  const prevAmrLoggedInRef = useRef<boolean | null>(null);
+  // Guards the AMR catalog-chase loop so concurrent renders can't start it
+  // twice (see the re-detect effect below).
+  const amrRescanInFlightRef = useRef(false);
   const agentTestRevisionRef = useRef(0);
   const providerTestRevisionRef = useRef(0);
   const providerModelsRevisionRef = useRef(0);
@@ -1204,53 +1203,64 @@ export function SettingsDialog({
     };
   }, [agentRescanRunning, handleRefreshAgents]);
 
-  // Re-detect agents the moment AMR sign-in completes. The agent list (and
-  // thus AMR's model dropdown) was last detected while signed out, so AMR
-  // came back with an empty, fail-closed model list; the live `vela models`
-  // catalog only becomes fetchable once the credential lands, and can lag the
-  // credential write by a beat. Poll a few times until the catalog arrives.
+  // Chase AMR's live model catalog whenever the user is signed in but the
+  // model list hasn't arrived yet. AMR is detected at app start (often while
+  // signed out, so it comes back with an empty, fail-closed list), and the
+  // live `vela models` catalog only becomes fetchable once the credential
+  // lands — and can lag the credential write by a beat. We must cover every
+  // way Settings ends up "signed in + empty", not just an in-Settings
+  // sign-in edge: onboarding signs in and re-detects exactly once, so if that
+  // single call lands during the propagation window Settings later mounts
+  // already signed in with an empty list. Keying on `loggedIn === true` +
+  // "AMR has no models" handles both; the picker shows its loading state
+  // (see renderAgentModelConfig) until the catalog fills in.
   //
-  // Read `onRefreshAgents` through a ref and depend only on the login edge:
-  // `onRefreshAgents` re-detects via `/api/agents` (the daemon already uses
-  // its persisted CLI env), so we don't thread config through here, and a
-  // changing callback identity must NOT tear this loop down mid-flight — that
-  // is what made the picker's loading row flash and vanish before the catalog
-  // arrived.
+  // `onRefreshAgents` / `agents` are read through refs so re-detecting (which
+  // changes their identity) can't tear the retry loop down mid-flight — that
+  // is what made the loading row flash and vanish before the catalog arrived.
+  // The in-flight ref keeps a single loop running across renders.
   const onRefreshAgentsRef = useRef(onRefreshAgents);
   onRefreshAgentsRef.current = onRefreshAgents;
+  const agentsRef = useRef(agents);
+  agentsRef.current = agents;
   useEffect(() => {
-    const loggedIn = amrCardStatus?.loggedIn ?? null;
-    const previouslyLoggedIn = prevAmrLoggedInRef.current;
-    prevAmrLoggedInRef.current = loggedIn;
-    if (previouslyLoggedIn !== false || loggedIn !== true) return;
+    if (amrCardStatus?.loggedIn !== true) return;
+    const amr = agentsRef.current.find((agent) => agent.id === 'amr');
+    if (!amr || (amr.models?.length ?? 0) > 0) return;
+    if (amrRescanInFlightRef.current) return;
+    amrRescanInFlightRef.current = true;
     let cancelled = false;
     void (async () => {
-      for (
-        let attempt = 0;
-        attempt < AMR_SIGN_IN_RESCAN_ATTEMPTS && !cancelled;
-        attempt += 1
-      ) {
-        let next: void | AgentInfo[];
-        try {
-          next = await onRefreshAgentsRef.current();
-        } catch {
-          return;
+      try {
+        for (
+          let attempt = 0;
+          attempt < AMR_SIGN_IN_RESCAN_ATTEMPTS && !cancelled;
+          attempt += 1
+        ) {
+          let next: void | AgentInfo[];
+          try {
+            next = await onRefreshAgentsRef.current();
+          } catch {
+            return;
+          }
+          if (cancelled) return;
+          const detected = Array.isArray(next) ? next : [];
+          const refreshed = detected.find((agent) => agent.id === 'amr');
+          // Stop once the live catalog has caught up (or AMR vanished); a
+          // still-empty list means vela hasn't published the catalog yet, so
+          // retry.
+          if (!refreshed || (refreshed.models?.length ?? 0) > 0) return;
+          await new Promise((resolve) => {
+            setTimeout(resolve, AMR_SIGN_IN_RESCAN_RETRY_MS);
+          });
         }
-        if (cancelled) return;
-        const detected = Array.isArray(next) ? next : [];
-        const amr = detected.find((agent) => agent.id === 'amr');
-        // Stop once the live catalog has caught up (or AMR vanished); a
-        // still-empty list means vela hasn't published the catalog yet, so
-        // retry. The picker shows its loading state throughout (see
-        // renderAgentModelConfig) so there is no blank gap.
-        if (!amr || (amr.models?.length ?? 0) > 0) return;
-        await new Promise((resolve) => {
-          setTimeout(resolve, AMR_SIGN_IN_RESCAN_RETRY_MS);
-        });
+      } finally {
+        amrRescanInFlightRef.current = false;
       }
     })();
     return () => {
       cancelled = true;
+      amrRescanInFlightRef.current = false;
     };
   }, [amrCardStatus?.loggedIn]);
 
