@@ -94,6 +94,16 @@ Open Design 是这样一种产物：Anthropic 随 Claude Design 推出的 **Agen
 <table>
 <tr>
 <td width="50%" valign="top">
+<img src="docs/screenshots/product/studio-prototype.png" alt="原型" /><br/>
+<sub><b>原型</b>——读取你的设计系统、在沙箱 iframe 中渲染的单页 HTML 工件，可即时预览、下载源码。</sub>
+</td>
+<td width="50%" valign="top">
+<img src="docs/screenshots/product/studio-hyperframe.png" alt="HyperFrame" /><br/>
+<sub><b>HyperFrame</b>——程序化动效与动态图形，渲染为真实 MP4（如 1920×1080 · 30fps）。</sub>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 <img src="docs/screenshots/product/studio-ppt.png" alt="演示文稿" /><br/>
 <sub><b>演示文稿</b>——可逐页预览、键盘翻页、导出 PPTX / PDF 的 pitch deck。</sub>
 </td>
