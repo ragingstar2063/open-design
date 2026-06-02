@@ -13432,10 +13432,6 @@ export async function startServer({
       const appCfgForAnalytics = await readAppConfig(RUNTIME_DATA_DIR).catch(
         () => ({} as Record<string, unknown>),
       );
-      const langfuseDeliveryForAnalytics = deriveLangfuseDeliveryState(
-        (appCfgForAnalytics as { telemetry?: Record<string, unknown> }).telemetry ?? {},
-        readTelemetrySinkConfig(),
-      );
       const detectedAgentsForAnalytics = await detectAgents(
         (appCfgForAnalytics as { agentCliEnv?: Record<string, unknown> }).agentCliEnv ?? {},
       ).catch(() => [] as Array<{ id: string; available: boolean }>);
@@ -13589,13 +13585,28 @@ export async function startServer({
         properties: baseProps,
         insertId: runInsertId,
       });
-      design.runs.wait(run).then((status: {
+      design.runs.wait(run).then(async (status: {
         status: string;
         error?: string | null;
         errorCode?: string | null;
         exitCode?: number | null;
         signal?: string | null;
       }) => {
+        // Langfuse eligibility must be re-derived at completion time, not
+        // reused from a launch-time snapshot. A long-running run can have the
+        // user flip telemetry consent or the relay config mid-flight; the
+        // Langfuse sink (`reportRunCompletedFromDaemon`) re-reads app config
+        // when the run ends, so PostHog's `langfuse_expected` /
+        // `langfuse_delivery_status` / `langfuse_drop_reason` must read the
+        // same completion-time eligibility to stay aligned. See PR #3412
+        // review.
+        const appCfgAtFinish = await readAppConfig(RUNTIME_DATA_DIR).catch(
+          () => ({} as Record<string, unknown>),
+        );
+        const langfuseDeliveryForAnalytics = deriveLangfuseDeliveryState(
+          (appCfgAtFinish as { telemetry?: Record<string, unknown> }).telemetry ?? {},
+          readTelemetrySinkConfig(),
+        );
         // `deriveRunErrorCode` is the invariant: when `result === 'failed'`
         // it always returns a non-empty string so dashboards keyed on
         // `error_code` never see a blank cell. Live in `run-result.ts`
