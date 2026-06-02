@@ -3237,26 +3237,34 @@ function CommentPreviewOverlays({
   strokePoints: StrokePoint[];
   onOpenComment: (comment: PreviewComment, snapshot: PreviewCommentSnapshot) => void;
 }) {
-  const overlayOffset = { x: offsetX, y: offsetY };
-  const visibleComments = comments
-    .map((comment, index) => ({
-      comment,
-      index,
-      snapshot: liveSnapshotForComment(comment, liveTargets),
-    }))
-    .filter((item): item is { comment: PreviewComment; index: number; snapshot: PreviewCommentSnapshot } =>
-      Boolean(item.snapshot),
-    );
-  const activeSavedIndex = activeTarget
-    ? visibleComments.findIndex(({ snapshot }) => snapshot.elementId === activeTarget.elementId)
-    : -1;
-  const activePinNumber = activeSavedIndex >= 0
-    ? activeSavedIndex + 1
-    : visibleComments.length + 1;
-  const targetOverlay = activeTarget ?? hoveredTarget;
-  return (
-    <div className="comment-overlay-layer" aria-hidden={false}>
-      {visibleComments.map(({ comment, index, snapshot }) => {
+  const overlayOffset = useMemo(() => ({ x: offsetX, y: offsetY }), [offsetX, offsetY]);
+  const visibleComments = useMemo(
+    () =>
+      comments
+        .map((comment, index) => ({
+          comment,
+          index,
+          snapshot: liveSnapshotForComment(comment, liveTargets),
+        }))
+        .filter((item): item is { comment: PreviewComment; index: number; snapshot: PreviewCommentSnapshot } =>
+          Boolean(item.snapshot),
+        ),
+    [comments, liveTargets],
+  );
+  // `onOpenComment` is an inline arrow from the parent (new identity every
+  // render), so read it through a ref to keep the saved-marker memo below from
+  // busting. The closure only calls stable state setters, so a current ref read
+  // is always correct.
+  const onOpenCommentRef = useRef(onOpenComment);
+  onOpenCommentRef.current = onOpenComment;
+  // Memoize the saved-marker subtree. While the user draws a pod lasso,
+  // `strokePoints` updates on every pointermove and re-renders this overlay;
+  // without this, every saved marker (bounds + JSX) was rebuilt each frame.
+  // Keyed only on the marker inputs (NOT strokePoints), so a steady set of
+  // comments reuses the whole subtree and React skips reconciling it.
+  const savedMarkers = useMemo(
+    () =>
+      visibleComments.map(({ comment, index, snapshot }) => {
         const bounds = overlayBoundsFromSnapshot(snapshot, scale, overlayOffset);
         const label = commentTargetDisplayName(comment);
         return (
@@ -3270,7 +3278,7 @@ function CommentPreviewOverlays({
               height: bounds.height,
             }}
             data-testid={`comment-saved-marker-${comment.elementId}`}
-            onClick={() => onOpenComment(comment, snapshot)}
+            onClick={() => onOpenCommentRef.current(comment, snapshot)}
           >
             <div className="comment-saved-outline" />
             <button
@@ -3278,7 +3286,7 @@ function CommentPreviewOverlays({
               className="comment-saved-pin"
               onClick={(event) => {
                 event.stopPropagation();
-                onOpenComment(comment, snapshot);
+                onOpenCommentRef.current(comment, snapshot);
               }}
               title={`${index + 1}. ${label}: ${comment.note}`}
               aria-label={`Open comment for ${label}`}
@@ -3287,7 +3295,19 @@ function CommentPreviewOverlays({
             </button>
           </div>
         );
-      })}
+      }),
+    [visibleComments, scale, overlayOffset],
+  );
+  const activeSavedIndex = activeTarget
+    ? visibleComments.findIndex(({ snapshot }) => snapshot.elementId === activeTarget.elementId)
+    : -1;
+  const activePinNumber = activeSavedIndex >= 0
+    ? activeSavedIndex + 1
+    : visibleComments.length + 1;
+  const targetOverlay = activeTarget ?? hoveredTarget;
+  return (
+    <div className="comment-overlay-layer" aria-hidden={false}>
+      {savedMarkers}
       {targetOverlay ? (
         <CommentTargetOverlay
           snapshot={targetOverlay}
@@ -4262,6 +4282,9 @@ function HtmlViewer({
   const [deployment, setDeployment] = useState<WebDeploymentInfo | null>(null);
   const [deploymentsByProvider, setDeploymentsByProvider] = useState<Partial<Record<WebDeployProviderId, WebDeploymentInfo>>>({});
   const [deployModalOpen, setDeployModalOpen] = useState(false);
+  const closeDeployModal = useCallback(() => {
+    setDeployModalOpen(false);
+  }, []);
   const [deployConfig, setDeployConfig] = useState<WebDeployConfigResponse | null>(null);
   const [deploying, setDeploying] = useState(false);
   const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link'>('idle');
@@ -4281,6 +4304,16 @@ function HtmlViewer({
   const [cloudflareZoneId, setCloudflareZoneId] = useState('');
   const [cloudflareDomainPrefix, setCloudflareDomainPrefix] = useState('');
   const deployProviderLoadSeqRef = useRef(0);
+  useEffect(() => {
+    if (!deployModalOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeDeployModal();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [closeDeployModal, deployModalOpen]);
   const [inTabPresent, setInTabPresent] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [boardMode, setBoardMode] = useState(false);
@@ -4777,10 +4810,12 @@ function HtmlViewer({
     () => source != null && htmlNeedsFocusGuard(source),
     [source],
   );
+  const [urlSelectionBridgeReady, setUrlSelectionBridgeReady] = useState(false);
   const useUrlLoadPreview = shouldUrlLoadHtmlPreview({
     mode,
     isDeck: effectiveDeck,
     commentMode: boardMode,
+    urlCommentBridge: urlSelectionBridgeReady,
     editMode: manualEditMode,
     urlModeBridge,
     inspectMode,
@@ -4789,7 +4824,7 @@ function HtmlViewer({
     needsFocusGuard,
   }) && !manualEditRequiresSrcDoc;
   const basePreviewSrcUrl = useMemo(
-    () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}&odPreviewBridge=scroll`,
+    () => `${projectRawUrl(projectId, file.name)}?v=${Math.round(file.mtime)}&r=${reloadKey}&odPreviewBridge=scroll&odPreviewBridge=selection`,
     [projectId, file.name, file.mtime, reloadKey],
   );
   const [previewSrcUrl, setPreviewSrcUrl] = useState(basePreviewSrcUrl);
@@ -4801,6 +4836,7 @@ function HtmlViewer({
     : basePreviewSrcUrl;
   useEffect(() => {
     setPreviewSrcUrl(basePreviewSrcUrl);
+    setUrlSelectionBridgeReady(false);
   }, [basePreviewSrcUrl]);
   useEffect(() => {
     iframeRef.current = useUrlLoadPreview ? urlPreviewIframeRef.current : srcDocPreviewIframeRef.current;
@@ -4866,6 +4902,18 @@ function HtmlViewer({
       const data = ev.data as { type?: string } | null;
       if (data?.type !== 'od:srcdoc-transport-ready') return;
       setSrcDocShellReady(true);
+    }
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, []);
+  useEffect(() => {
+    function onMessage(ev: MessageEvent) {
+      const frame = urlPreviewIframeRef.current;
+      if (ev.source !== frame?.contentWindow) return;
+      if (frame.getAttribute('src') === 'about:blank') return;
+      const data = ev.data as { type?: string } | null;
+      if (data?.type !== 'od:url-selection-bridge-ready') return;
+      setUrlSelectionBridgeReady(true);
     }
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -5073,14 +5121,14 @@ function HtmlViewer({
       enabled: boardMode,
       mode: boardTool,
     }, '*');
-  }, [boardMode, boardTool, srcDoc]);
+  }, [boardMode, boardTool, srcDoc, useUrlLoadPreview]);
 
   useEffect(() => {
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: 'od-edit-mode', enabled: manualEditMode }, '*');
     postSelectedManualEditTargetToIframe(manualEditMode ? selectedManualEditTarget?.id ?? null : null);
-  }, [manualEditMode, selectedManualEditTarget?.id, srcDoc]);
+  }, [manualEditMode, selectedManualEditTarget?.id, srcDoc, useUrlLoadPreview]);
 
   const previewStyleToIframe = useCallback((id: string, styles: Partial<ManualEditStyles>, version: number) => {
     const win = iframeRef.current?.contentWindow;
@@ -5112,7 +5160,7 @@ function HtmlViewer({
     const win = iframeRef.current?.contentWindow;
     if (!win) return;
     win.postMessage({ type: 'od:inspect-mode', enabled: inspectMode }, '*');
-  }, [inspectMode, srcDoc]);
+  }, [inspectMode, srcDoc, useUrlLoadPreview]);
 
   // Mirror the bridge's `od:comment-targets` broadcast into
   // `liveCommentTargets` whenever EITHER Inspect or Comments mode is
@@ -7695,11 +7743,13 @@ function HtmlViewer({
                         onLoad={() => {
                           const frame = urlPreviewIframeRef.current;
                           if (useUrlLoadPreview) iframeRef.current = frame;
+                          setUrlSelectionBridgeReady(false);
                           dcViewportRestoreAtRef.current = Date.now();
                           frame?.contentWindow?.postMessage({
                             type: '__dc_set_viewport',
                             ...dcViewportRef.current,
                           }, '*');
+                          frame?.contentWindow?.postMessage({ type: 'od:url-selection-bridge-probe' }, '*');
                           syncBridgeModes(frame);
                           if (useUrlLoadPreview) restorePreviewScrollPosition();
                         }}
@@ -7718,11 +7768,13 @@ function HtmlViewer({
                         onLoad={() => {
                           const frame = urlPreviewIframeRef.current;
                           if (useUrlLoadPreview) iframeRef.current = frame;
+                          setUrlSelectionBridgeReady(false);
                           dcViewportRestoreAtRef.current = Date.now();
                           frame?.contentWindow?.postMessage({
                             type: '__dc_set_viewport',
                             ...dcViewportRef.current,
                           }, '*');
+                          frame?.contentWindow?.postMessage({ type: 'od:url-selection-bridge-probe' }, '*');
                           syncBridgeModes(frame);
                           if (useUrlLoadPreview) restorePreviewScrollPosition();
                         }}
@@ -8122,7 +8174,13 @@ function HtmlViewer({
         </div>
       ) : null}
       {deployModalOpen ? (
-        <div className="modal-backdrop" role="presentation">
+        <div
+          className="modal-backdrop deploy-flow-backdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeDeployModal();
+          }}
+        >
           <div className="modal deploy-modal deploy-flow-modal" role="dialog" aria-modal="true">
             <div className="deploy-flow-modal__scroll">
               <div className="modal-head">
@@ -8153,7 +8211,7 @@ function HtmlViewer({
                   {activeProjectSocialShare ? (
                     <SocialShareGrid
                       share={activeProjectSocialShare}
-                      onAfterShare={() => setDeployModalOpen(false)}
+                      onAfterShare={closeDeployModal}
                     />
                   ) : null}
                   {socialShareBlockedDeployment?.url ? (
@@ -8420,7 +8478,7 @@ function HtmlViewer({
               <button
                 type="button"
                 className="ghost-link button-like"
-                onClick={() => setDeployModalOpen(false)}
+                onClick={closeDeployModal}
               >
                 {t('common.cancel')}
               </button>

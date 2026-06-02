@@ -1044,6 +1044,7 @@ export function DesignBrowserPanel({
               }}
               onBlur={(event) => {
                 if (event.currentTarget.form?.contains(event.relatedTarget as Node | null)) return;
+                setSuggestionsOpen(false);
                 window.setTimeout(() => setAddressEditing(false), 80);
               }}
               placeholder={addressDisplayParts.url ? '' : 'Enter URL or search...'}

@@ -251,6 +251,21 @@ describe('DesignBrowserPanel <webview> navigation', () => {
     expect(screen.getByRole('option', { name: /Startups Gallery/ })).toBeTruthy();
   });
 
+  it('closes address suggestions when the address input blurs outside the address bar', () => {
+    render(
+      <DesignBrowserPanel projectId="proj-webview-suggestions-blur" onOpenFile={() => {}} onRefreshFiles={() => {}} />,
+    );
+
+    const input = screen.getByLabelText('Browser address');
+    fireEvent.focus(input);
+
+    expect(screen.getByRole('listbox')).toBeTruthy();
+
+    fireEvent.blur(input, { relatedTarget: null });
+
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
   it('keeps the browser fallback content free of desktop-only overlay banners', () => {
     restoreHost?.();
     restoreHost = null;

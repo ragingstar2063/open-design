@@ -134,6 +134,8 @@ function migrate(db: SqliteDb): void {
 
     CREATE INDEX IF NOT EXISTS idx_preview_comments_conversation
       ON preview_comments(project_id, conversation_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_preview_comments_conversation_created
+      ON preview_comments(project_id, conversation_id, created_at ASC);
 
     CREATE TABLE IF NOT EXISTS tabs (
       project_id TEXT NOT NULL,
@@ -1144,7 +1146,7 @@ export function listPreviewComments(db: SqliteDb, projectId: string, conversatio
               note, status, created_at AS createdAt, updated_at AS updatedAt
          FROM preview_comments
         WHERE project_id = ? AND conversation_id = ?
-        ORDER BY updated_at DESC`,
+        ORDER BY created_at ASC, rowid ASC`,
     )
     .all(projectId, conversationId) as DbRow[])
     .map(normalizePreviewComment);

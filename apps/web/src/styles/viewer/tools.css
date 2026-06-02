@@ -929,9 +929,13 @@
   max-height: calc(100vh - 32px);
   overflow: auto;
 }
+.deploy-flow-backdrop.modal-backdrop {
+  box-sizing: border-box;
+  padding: clamp(48px, 7vh, 88px) 16px;
+}
 .deploy-flow-modal.modal {
-  max-height: min(860px, calc(100vh - 48px));
-  max-height: min(860px, calc(100dvh - 48px));
+  max-height: min(760px, calc(100vh - 112px));
+  max-height: min(760px, calc(100dvh - 112px));
   gap: 0;
   overflow: hidden;
   padding: 0;
@@ -941,7 +945,7 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 22px;
+  padding: 20px 22px 18px;
   scrollbar-width: thin;
 }
 .image-export-modal.modal {
@@ -1065,6 +1069,10 @@
   flex-direction: column;
   gap: 14px;
   margin-top: 18px;
+}
+.deploy-flow-modal .deploy-form {
+  gap: 12px;
+  margin-top: 16px;
 }
 .deploy-provider-field {
   display: flex;
