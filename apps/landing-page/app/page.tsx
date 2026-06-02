@@ -13,6 +13,7 @@ import { Header, type HeaderProps } from './_components/header';
 import { Wire } from './_components/wire';
 import {
   DEFAULT_LOCALE,
+  getCommonCopy,
   getHomePageCopy,
   localizedHref,
   type LandingLocaleCode,
@@ -203,6 +204,7 @@ export default function Page({
 }: PageProps) {
   const skills = fmt(counts.skills);
   const systems = fmt(counts.systems);
+  const commonCopy = getCommonCopy(locale);
   const home = getHomePageCopy(locale);
   const pcopy = getPluginsCopy(locale);
   // Labs pills mirror the live `/plugins/templates/` category strip: an
