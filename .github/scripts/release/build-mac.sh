@@ -79,9 +79,34 @@ prepare_mac_signing() {
   export CSC_KEY_PASSWORD="$APPLE_SIGNING_CERTIFICATE_PASSWORD"
 }
 
-preflight_mac_signing() {
+install_mac_signing_keychain() {
   local cert_path="$1"
-  local keychain_path="$RUNNER_TEMP/open-design-signing-preflight.keychain"
+  local helper="${OPEN_DESIGN_MAC_SIGNING_HELPER:-}"
+  if [ -z "$helper" ]; then
+    return 1
+  fi
+
+  local password_path="$RUNNER_TEMP/open-design-signing.p12.password"
+  trap 'rm -f "$password_path"' RETURN
+  printf '%s' "$APPLE_SIGNING_CERTIFICATE_PASSWORD" > "$password_path"
+  chmod 600 "$password_path"
+
+  echo "mac signing: installing identity through sudo helper"
+  sudo -n "$helper" "$cert_path" "$password_path"
+  rm -f "$password_path"
+
+  export CSC_KEYCHAIN="${OPEN_DESIGN_MAC_SIGNING_KEYCHAIN:-/Library/Keychains/open-design-release-signing.keychain}"
+  security list-keychains -d user -s "$CSC_KEYCHAIN" /Library/Keychains/System.keychain
+  unset CSC_LINK
+  unset CSC_KEY_PASSWORD
+  return 0
+}
+
+preflight_mac_signing() {
+  local keychain_path="${CSC_KEYCHAIN:-}"
+  if [ -z "$keychain_path" ]; then
+    keychain_path="$RUNNER_TEMP/open-design-signing-preflight.keychain"
+  fi
   local keychain_password
   keychain_password="$(uuidgen)"
   local probe_bin="$RUNNER_TEMP/open-design-codesign-preflight"
@@ -107,16 +132,20 @@ preflight_mac_signing() {
     security delete-keychain "$keychain_path" >/dev/null 2>&1 || rm -f "$keychain_path"
     rm -f "$probe_bin"
   }
-  trap cleanup_mac_signing_preflight RETURN
+  if [ -z "${CSC_KEYCHAIN:-}" ]; then
+    trap cleanup_mac_signing_preflight RETURN
 
-  echo "mac signing preflight: importing certificate into isolated keychain"
-  rm -f "$keychain_path" "$probe_bin"
-  security create-keychain -p "$keychain_password" "$keychain_path"
-  security unlock-keychain -p "$keychain_password" "$keychain_path"
-  security set-keychain-settings -lut 21600 "$keychain_path"
-  security list-keychains -d user -s "$keychain_path" "${current_keychains[@]}"
-  security import "$cert_path" -k "$keychain_path" -T /usr/bin/codesign -T /usr/bin/productbuild -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD"
-  security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+    echo "mac signing preflight: importing certificate into isolated keychain"
+    rm -f "$keychain_path" "$probe_bin"
+    security create-keychain -p "$keychain_password" "$keychain_path"
+    security unlock-keychain -p "$keychain_password" "$keychain_path"
+    security set-keychain-settings -lut 21600 "$keychain_path"
+    security list-keychains -d user -s "$keychain_path" "${current_keychains[@]}"
+    security import "$CSC_LINK" -k "$keychain_path" -T /usr/bin/codesign -T /usr/bin/productbuild -P "$APPLE_SIGNING_CERTIFICATE_PASSWORD"
+    security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path"
+  else
+    trap 'rm -f "$probe_bin"' RETURN
+  fi
 
   identities="$(security find-identity -v -p codesigning "$keychain_path")"
   printf '%s\n' "$identities"
@@ -125,6 +154,9 @@ preflight_mac_signing() {
   if [ -z "$identity_hash" ]; then
     echo "mac signing preflight failed: no Developer ID Application identity found after import" >&2
     exit 1
+  fi
+  if [ -n "$identity_name" ]; then
+    export CSC_NAME="$identity_name"
   fi
 
   echo "mac signing preflight: default keychain=${default_keychain:-<none>}"
@@ -267,7 +299,10 @@ inspect_electron_framework_symlinks
 
 if [ "$sign_mode" = "on" ]; then
   prepare_mac_signing
-  preflight_mac_signing "$CSC_LINK"
+  if [ -n "${OPEN_DESIGN_MAC_SIGNING_HELPER:-}" ]; then
+    install_mac_signing_keychain "$CSC_LINK"
+  fi
+  preflight_mac_signing
 fi
 
 rm -rf "$tools_pack_dir"

@@ -245,6 +245,7 @@ jobs:
           MAC_BUILD_TARGET: dmg
           MAC_COMPRESSION: normal
           MAC_SIGN_MODE: ${{ inputs.mac_sign_mode }}
+          OPEN_DESIGN_MAC_SIGNING_HELPER: /usr/local/libexec/open-design/install-signing-identity.zsh
           OPEN_DESIGN_RELEASE_PROFILE: /Users/runner/.profile
           RELEASE_VERSION: ${{ inputs.release_version || needs.metadata.outputs.beta_version }}
           TOOLS_PACK_NAMESPACE: release-beta
