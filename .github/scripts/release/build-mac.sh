@@ -85,8 +85,9 @@ preflight_mac_signing() {
   local keychain_password
   keychain_password="$(uuidgen)"
   local probe_bin="$RUNNER_TEMP/open-design-codesign-preflight"
-  local identities identity_hash
+  local identities identity_hash identity_name default_keychain
   local current_keychains=()
+  default_keychain="$(security default-keychain -d user 2>/dev/null | sed 's/^ *"//; s/"$//' || true)"
 
   while IFS= read -r line; do
     line="${line#*\"}"
@@ -99,6 +100,9 @@ preflight_mac_signing() {
   cleanup_mac_signing_preflight() {
     if [ "${#current_keychains[@]}" -gt 0 ]; then
       security list-keychains -d user -s "${current_keychains[@]}" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$default_keychain" ]; then
+      security default-keychain -d user -s "$default_keychain" >/dev/null 2>&1 || true
     fi
     security delete-keychain "$keychain_path" >/dev/null 2>&1 || rm -f "$keychain_path"
     rm -f "$probe_bin"
@@ -117,15 +121,49 @@ preflight_mac_signing() {
   identities="$(security find-identity -v -p codesigning "$keychain_path")"
   printf '%s\n' "$identities"
   identity_hash="$(printf '%s\n' "$identities" | awk '/Developer ID Application/ { print $2; exit }')"
+  identity_name="$(printf '%s\n' "$identities" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)"
   if [ -z "$identity_hash" ]; then
     echo "mac signing preflight failed: no Developer ID Application identity found after import" >&2
     exit 1
   fi
 
-  cp /bin/echo "$probe_bin"
-  codesign --sign "$identity_hash" --force --keychain "$keychain_path" --timestamp=none "$probe_bin"
-  codesign --verify --verbose "$probe_bin"
-  echo "mac signing preflight: codesign succeeded with identity $identity_hash"
+  echo "mac signing preflight: default keychain=${default_keychain:-<none>}"
+  echo "mac signing preflight: user keychains"
+  security list-keychains -d user
+
+  run_codesign_probe() {
+    local label="$1"
+    shift
+    cp /bin/echo "$probe_bin"
+    echo "mac signing preflight: trying $label"
+    if codesign "$@" "$probe_bin"; then
+      codesign --verify --verbose "$probe_bin"
+      echo "mac signing preflight: $label succeeded"
+      return 0
+    fi
+    echo "mac signing preflight: $label failed" >&2
+    return 1
+  }
+
+  if run_codesign_probe "hash with explicit keychain" --sign "$identity_hash" --force --keychain "$keychain_path" --timestamp=none; then
+    return 0
+  fi
+  if [ -n "$identity_name" ] && run_codesign_probe "name with explicit keychain" --sign "$identity_name" --force --keychain "$keychain_path" --timestamp=none; then
+    return 0
+  fi
+  if run_codesign_probe "hash through keychain search list" --sign "$identity_hash" --force --timestamp=none; then
+    return 0
+  fi
+  security default-keychain -d user -s "$keychain_path"
+  if run_codesign_probe "hash after setting default keychain" --sign "$identity_hash" --force --timestamp=none; then
+    return 0
+  fi
+  if [ -n "$identity_name" ] && run_codesign_probe "name after setting default keychain" --sign "$identity_name" --force --timestamp=none; then
+    return 0
+  fi
+
+  echo "mac signing preflight failed: imported identity is visible to security but unusable by codesign" >&2
+  exit 1
 }
 
 capture_framework_diagnostics() {
