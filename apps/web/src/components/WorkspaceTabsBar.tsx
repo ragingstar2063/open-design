@@ -685,8 +685,11 @@ export function WorkspaceTabsBar({ route, projects }: Props) {
                         >
                           <button
                             type="button"
-                            className="workspace-tabs-list__main"
+                            className="workspace-tabs-list__main od-tooltip"
                             onClick={() => openTab(display.tab)}
+                            title={display.title}
+                            data-tooltip={display.title}
+                            data-tooltip-placement="right"
                           >
                             <span className="workspace-tabs-list__icon" aria-hidden>
                               <Icon name={display.icon} size={15} />
@@ -698,9 +701,11 @@ export function WorkspaceTabsBar({ route, projects }: Props) {
                           </button>
                           <button
                             type="button"
-                            className="workspace-tabs-list__close"
+                            className="workspace-tabs-list__close od-tooltip"
                             onClick={() => closeTab(display.id)}
                             title={t('common.close')}
+                            data-tooltip={t('common.close')}
+                            data-tooltip-placement="left"
                             aria-label={t('common.close')}
                           >
                             <Icon name="close" size={11} />

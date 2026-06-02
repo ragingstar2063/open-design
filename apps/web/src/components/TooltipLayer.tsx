@@ -71,22 +71,43 @@ function positionTooltip(
   };
 }
 
+function sameStyle(
+  left: TooltipState['style'],
+  right: TooltipState['style'],
+): boolean {
+  return left.left === right.left
+    && left.top === right.top
+    && left.visibility === right.visibility;
+}
+
 export function TooltipLayer() {
   const tooltipRef = useRef<HTMLDivElement | null>(null);
+  const rafRef = useRef<number | null>(null);
   const [state, setState] = useState<TooltipState | null>(null);
 
   const hideTooltip = useCallback(() => {
+    if (rafRef.current !== null) {
+      window.cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
     setState(null);
   }, []);
 
   const showTooltip = useCallback((target: HTMLElement) => {
     const text = target.dataset.tooltip?.trim();
     if (!text) return;
-    setState({
-      target,
-      text,
-      placement: tooltipPlacement(target),
-      style: { left: 0, top: 0, visibility: 'hidden' },
+    const placement = tooltipPlacement(target);
+    setState((current) => {
+      if (current?.target === target) {
+        if (current.text === text && current.placement === placement) return current;
+        return { ...current, text, placement };
+      }
+      return {
+        target,
+        text,
+        placement,
+        style: { left: 0, top: 0, visibility: 'hidden' },
+      };
     });
   }, []);
 
@@ -97,19 +118,43 @@ export function TooltipLayer() {
       if (current.target.getAttribute('aria-expanded') === 'true') return null;
       const node = tooltipRef.current;
       if (!node) return current;
+      const placement = tooltipPlacement(current.target);
+      const nextText = current.target.dataset.tooltip?.trim() ?? current.text;
+      const nextStyle = positionTooltip(current.target, node, placement);
+      if (
+        current.text === nextText
+        && current.placement === placement
+        && sameStyle(current.style, nextStyle)
+      ) {
+        return current;
+      }
       return {
         ...current,
-        text: current.target.dataset.tooltip?.trim() ?? current.text,
-        placement: tooltipPlacement(current.target),
-        style: positionTooltip(current.target, node, tooltipPlacement(current.target)),
+        text: nextText,
+        placement,
+        style: nextStyle,
       };
     });
   }, []);
+
+  const scheduleUpdatePosition = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      updatePosition();
+    });
+  }, [updatePosition]);
 
   useLayoutEffect(() => {
     if (!state) return;
     updatePosition();
   }, [state?.target, state?.text, state?.placement, updatePosition]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     const onPointerOver = (event: PointerEvent) => {
@@ -143,18 +188,18 @@ export function TooltipLayer() {
     document.addEventListener('focusin', onFocusIn);
     document.addEventListener('focusout', onFocusOut);
     document.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', updatePosition);
-    window.addEventListener('scroll', updatePosition, true);
+    window.addEventListener('resize', scheduleUpdatePosition);
+    window.addEventListener('scroll', scheduleUpdatePosition, true);
     return () => {
       document.removeEventListener('pointerover', onPointerOver);
       document.removeEventListener('pointerout', onPointerOut);
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
       document.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('resize', updatePosition);
-      window.removeEventListener('scroll', updatePosition, true);
+      window.removeEventListener('resize', scheduleUpdatePosition);
+      window.removeEventListener('scroll', scheduleUpdatePosition, true);
     };
-  }, [hideTooltip, showTooltip, updatePosition]);
+  }, [hideTooltip, scheduleUpdatePosition, showTooltip]);
 
   if (!state || typeof document === 'undefined') return null;
 

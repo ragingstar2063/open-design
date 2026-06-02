@@ -3890,9 +3890,11 @@ function ReactComponentViewer({
         <div className="viewer-toolbar-left">
           <button
             type="button"
-            className="icon-only"
+            className="icon-only od-tooltip"
             onClick={() => setReloadKey((n) => n + 1)}
             title={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            data-tooltip={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            data-tooltip-placement="bottom"
             aria-label={`${t('fileViewer.reloadAria')} ${t('fileViewer.preview')}`}
           >
             <Icon name="reload" size={14} />
@@ -3924,9 +3926,12 @@ function ReactComponentViewer({
               <div className="share-menu" ref={shareRef}>
                 <button
                   type="button"
-                  className="viewer-action primary viewer-action-export"
+                  className="viewer-action primary viewer-action-export od-tooltip"
                   aria-haspopup="menu"
                   aria-expanded={shareMenuOpen}
+                  title={t('fileViewer.shareLabel')}
+                  data-tooltip={t('fileViewer.shareLabel')}
+                  data-tooltip-placement="bottom"
                   onClick={() => setShareMenuOpen((v) => !v)}
                 >
                   <span className="export-action-spacer" aria-hidden />
@@ -7135,10 +7140,11 @@ function HtmlViewer({
               <span title={boardPreviewImage.file.name}>{boardPreviewImage.file.name}</span>
               <button
                 type="button"
-                className="icon-only"
+                className="icon-only od-tooltip"
                 onClick={() => setBoardPreviewIndex(null)}
                 aria-label={t('common.close')}
                 title={t('common.close')}
+                data-tooltip={t('common.close')}
               >
                 <Icon name="close" size={14} />
               </button>
@@ -7235,9 +7241,11 @@ function HtmlViewer({
         <div className="viewer-toolbar-left">
           <button
             type="button"
-            className="icon-only"
+            className="icon-only od-tooltip"
             onClick={reloadHtmlPreview}
             title={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            data-tooltip={`${t('fileViewer.reload')} ${t('fileViewer.preview')}`}
+            data-tooltip-placement="bottom"
             aria-label={`${t('fileViewer.reloadAria')} ${t('fileViewer.preview')}`}
           >
             <Icon name="reload" size={14} />

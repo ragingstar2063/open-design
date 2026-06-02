@@ -940,9 +940,10 @@ function AssistantForkButton({
   return (
     <button
       type="button"
-      className="assistant-copy-button"
+      className="assistant-copy-button od-tooltip"
       disabled={disabled}
       data-tooltip={label}
+      data-tooltip-placement="top"
       onClick={onFork}
       aria-label={label}
       title={label}
@@ -978,9 +979,10 @@ function AssistantMarkdownCopyButton({ markdown }: { markdown: string }) {
   return (
     <button
       type="button"
-      className="assistant-copy-button"
+      className="assistant-copy-button od-tooltip"
       data-copied={copied ? "true" : "false"}
       data-tooltip={label}
+      data-tooltip-placement="top"
       onClick={() => {
         void handleCopy();
       }}
@@ -1277,9 +1279,10 @@ function AssistantFeedback({
     >
       <button
         type="button"
-        className="assistant-feedback-button"
+        className="assistant-feedback-button od-tooltip"
         data-selected={selected === "positive" ? "true" : "false"}
         data-tooltip={t("assistant.feedbackPositive")}
+        data-tooltip-placement="top"
         aria-pressed={selected === "positive"}
         aria-label={t("assistant.feedbackPositive")}
         title={t("assistant.feedbackPositive")}
@@ -1303,9 +1306,10 @@ function AssistantFeedback({
       </button>
       <button
         type="button"
-        className="assistant-feedback-button"
+        className="assistant-feedback-button od-tooltip"
         data-selected={selected === "negative" ? "true" : "false"}
         data-tooltip={t("assistant.feedbackNegative")}
+        data-tooltip-placement="top"
         aria-pressed={selected === "negative"}
         aria-label={t("assistant.feedbackNegative")}
         title={t("assistant.feedbackNegative")}

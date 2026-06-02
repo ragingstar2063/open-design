@@ -2001,8 +2001,9 @@ export function ProjectView({
       });
       if (!saved) return null;
       setPreviewComments((current) => {
-        const rest = current.filter((comment) => comment.id !== saved.id);
-        return [saved, ...rest];
+        const existingIndex = current.findIndex((comment) => comment.id === saved.id);
+        if (existingIndex < 0) return [...current, saved];
+        return current.map((comment, index) => (index === existingIndex ? saved : comment));
       });
       setAttachedComments((current) =>
         attachAfterSave ? mergeAttachedComments(current, saved) : current.map((comment) => comment.id === saved.id ? saved : comment),

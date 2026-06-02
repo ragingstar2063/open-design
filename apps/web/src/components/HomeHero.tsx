@@ -1295,10 +1295,11 @@ export const HomeHero = forwardRef<HomeHeroHandle, Props>(function HomeHero(
               <span title={previewHomeFile.name}>{previewHomeFile.name}</span>
               <button
                 type="button"
-                className="icon-only"
+                className="icon-only od-tooltip"
                 onClick={() => setPreviewHomeFileKey(null)}
                 aria-label={t('common.close')}
                 title={t('common.close')}
+                data-tooltip={t('common.close')}
               >
                 <Icon name="close" size={14} />
               </button>

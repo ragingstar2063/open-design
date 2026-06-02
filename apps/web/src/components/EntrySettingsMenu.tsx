@@ -135,9 +135,11 @@ export function EntrySettingsMenu({
       <button
         ref={triggerRef}
         type="button"
-        className="settings-icon-btn"
+        className="settings-icon-btn od-tooltip"
         onClick={() => setOpen((value) => !value)}
         title={t('entry.openSettingsTitle')}
+        data-tooltip={t('entry.openSettingsTitle')}
+        data-tooltip-placement="bottom"
         aria-label={t('entry.openSettingsAria')}
         aria-haspopup="menu"
         aria-expanded={open}

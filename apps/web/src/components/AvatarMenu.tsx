@@ -89,11 +89,12 @@ export function AvatarMenu({
       <button
         ref={triggerRef}
         type="button"
-        className="avatar-agent-trigger"
+        className="avatar-agent-trigger od-tooltip"
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="menu"
         aria-expanded={open}
         data-tooltip={t('avatar.title')}
+        data-tooltip-placement="bottom"
         title={t('avatar.title')}
         aria-label={t('avatar.title')}
       >

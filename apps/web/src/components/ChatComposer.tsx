@@ -2164,9 +2164,11 @@ function StagedAttachments({
                 </>
               )}
               <button
-                className="staged-remove"
+                type="button"
+                className="staged-remove od-tooltip"
                 onClick={() => onRemove(a.path)}
                 title={t('common.delete')}
+                data-tooltip={t('common.delete')}
                 aria-label={t('chat.removeAria', { name: a.name })}
               >
                 <Icon name="close" size={11} />
@@ -2190,10 +2192,11 @@ function StagedAttachments({
               <span title={preview.path}>{preview.name}</span>
               <button
                 type="button"
-                className="icon-only"
+                className="icon-only od-tooltip"
                 onClick={() => setPreview(null)}
                 aria-label={t('common.close')}
                 title={t('common.close')}
+                data-tooltip={t('common.close')}
               >
                 <Icon name="close" size={14} />
               </button>
@@ -2287,9 +2290,11 @@ function StagedRunContexts({
             {workspaceItem.label}
           </span>
           <button
-            className="staged-remove"
+            type="button"
+            className="staged-remove od-tooltip"
             onClick={() => onRemoveWorkspace(workspaceItem.id)}
             title={t('common.delete')}
+            data-tooltip={t('common.delete')}
             aria-label={t('chat.removeAria', { name: workspaceItem.label })}
           >
             <Icon name="close" size={11} />
@@ -2308,9 +2313,11 @@ function StagedRunContexts({
             @{s.name}
           </span>
           <button
-            className="staged-remove"
+            type="button"
+            className="staged-remove od-tooltip"
             onClick={() => onRemoveSkill(s.id)}
             title={t('common.delete')}
+            data-tooltip={t('common.delete')}
             aria-label={t('chat.removeAria', { name: s.name })}
           >
             <Icon name="close" size={11} />
@@ -2331,9 +2338,11 @@ function StagedRunContexts({
               @{label}
             </span>
             <button
-              className="staged-remove"
+              type="button"
+              className="staged-remove od-tooltip"
               onClick={() => onRemoveMcp(server.id)}
               title={t('common.delete')}
+              data-tooltip={t('common.delete')}
               aria-label={t('chat.removeAria', { name: label })}
             >
               <Icon name="close" size={11} />
@@ -2353,9 +2362,11 @@ function StagedRunContexts({
             @{connector.name}
           </span>
           <button
-            className="staged-remove"
+            type="button"
+            className="staged-remove od-tooltip"
             onClick={() => onRemoveConnector(connector.id)}
             title={t('common.delete')}
+            data-tooltip={t('common.delete')}
             aria-label={t('chat.removeAria', { name: connector.name })}
           >
             <Icon name="close" size={11} />
@@ -2389,9 +2400,11 @@ function StagedCommentAttachments({
             {a.comment ? <span>{a.comment}</span> : null}
           </span>
           <button
-            className="staged-remove"
+            type="button"
+            className="staged-remove od-tooltip"
             onClick={() => onRemove(a.id)}
             title={t('chat.comments.removeAttachment')}
+            data-tooltip={t('chat.comments.removeAttachment')}
             aria-label={t('chat.comments.removeAttachmentAria', { name: a.elementId })}
           >
             <Icon name="close" size={11} />

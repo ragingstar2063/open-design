@@ -1209,12 +1209,13 @@ function IconTooltipButton({
   children: ReactNode;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   return (
-    <span className="db-tooltip-anchor" data-tooltip={label}>
+    <span className="db-tooltip-anchor od-tooltip" data-tooltip={label} data-tooltip-placement="bottom">
       <button
         {...buttonProps}
         type="button"
         className={['db-icon-btn', className].filter(Boolean).join(' ')}
         aria-label={label}
+        title={label}
       >
         {children}
       </button>

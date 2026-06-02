@@ -391,8 +391,8 @@
 .assistant-feedback-button[data-selected="true"] svg {
   fill: currentColor;
 }
-.assistant-copy-button[data-tooltip]::after,
-.assistant-feedback-button[data-tooltip]::after {
+.assistant-copy-button:not(.od-tooltip)[data-tooltip]::after,
+.assistant-feedback-button:not(.od-tooltip)[data-tooltip]::after {
   position: absolute;
   z-index: 20;
   left: 50%;
@@ -416,10 +416,10 @@
     transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
   white-space: nowrap;
 }
-.assistant-copy-button[data-tooltip]:hover::after,
-.assistant-copy-button[data-tooltip]:focus-visible::after,
-.assistant-feedback-button[data-tooltip]:hover::after,
-.assistant-feedback-button[data-tooltip]:focus-visible::after {
+.assistant-copy-button:not(.od-tooltip)[data-tooltip]:hover::after,
+.assistant-copy-button:not(.od-tooltip)[data-tooltip]:focus-visible::after,
+.assistant-feedback-button:not(.od-tooltip)[data-tooltip]:hover::after,
+.assistant-feedback-button:not(.od-tooltip)[data-tooltip]:focus-visible::after {
   opacity: 1;
   transform: translate(-50%, 0);
 }

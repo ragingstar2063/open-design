@@ -2056,9 +2056,10 @@ function QueuedSendStrip({
             >
               <button
                 type="button"
-                className="chat-queued-send-drag-handle chat-queued-send-tooltip"
+                className="chat-queued-send-drag-handle chat-queued-send-tooltip od-tooltip"
                 title={t('chat.queuedReorder')}
                 data-tooltip={t('chat.queuedReorder')}
+                data-tooltip-placement="right"
                 aria-label={t('chat.queuedReorder')}
                 draggable={canReorder}
                 disabled={!canReorder}
@@ -2075,9 +2076,10 @@ function QueuedSendStrip({
                 {onEdit ? (
                   <button
                     type="button"
-                    className="chat-queued-send-action chat-queued-send-tooltip"
+                    className="chat-queued-send-action chat-queued-send-tooltip od-tooltip"
                     title={t('chat.queuedEdit')}
                     data-tooltip={t('chat.queuedEdit')}
+                    data-tooltip-placement="top"
                     aria-label={t('chat.queuedEdit')}
                     onClick={() => onEdit(item)}
                   >
@@ -2086,9 +2088,10 @@ function QueuedSendStrip({
                 ) : null}
                 <button
                   type="button"
-                  className="chat-queued-send-action chat-queued-send-tooltip"
+                  className="chat-queued-send-action chat-queued-send-tooltip od-tooltip"
                   title={t('chat.send')}
                   data-tooltip={t('chat.send')}
+                  data-tooltip-placement="top"
                   aria-label={t('chat.send')}
                   onClick={() => onSendNow?.(item.id)}
                   disabled={!onSendNow}
@@ -2098,10 +2101,11 @@ function QueuedSendStrip({
                 {onRemove ? (
                   <button
                     type="button"
-                    className="chat-queued-send-action chat-queued-send-tooltip"
+                    className="chat-queued-send-action chat-queued-send-tooltip od-tooltip"
                     onClick={() => onRemove(item.id)}
                     title={t('chat.comments.remove')}
                     data-tooltip={t('chat.comments.remove')}
+                    data-tooltip-placement="top"
                     aria-label={t('chat.comments.remove')}
                   >
                     <Icon name="trash" size={13} />
