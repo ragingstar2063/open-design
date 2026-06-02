@@ -889,6 +889,52 @@ describe('SettingsDialog execution settings BYOK interactions', () => {
     );
   });
 
+  it('keeps a suggested model the user explicitly re-picked after discovery resolves', async () => {
+    fetchProviderModelsMock.mockResolvedValueOnce({
+      ok: true,
+      kind: 'success',
+      latencyMs: 12,
+      models: [{ id: 'account-ready-model', label: 'Account Ready' }],
+    });
+    const { onPersist } = renderSettingsDialog({
+      apiProtocol: 'openai',
+      baseUrl: 'https://api.openai.com/v1',
+      model: 'gpt-4o',
+      apiProviderBaseUrl: 'https://api.openai.com/v1',
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'OpenAI' }));
+    expect(fetchProviderModelsMock).not.toHaveBeenCalled();
+
+    // The user deliberately re-picks the suggested model that equals the
+    // provider preset id before discovery runs.
+    fireEvent.click(screen.getByRole('combobox', { name: 'Model' }));
+    const modelPopover = screen.getByTestId('settings-byok-model-popover');
+    fireEvent.click(within(modelPopover).getByRole('option', { name: 'gpt-4o' }));
+
+    // Supplying the key triggers account-model discovery.
+    fireEvent.change(screen.getByLabelText('API key'), {
+      target: { value: 'sk-openai' },
+    });
+    fireEvent.blur(screen.getByLabelText('API key'));
+
+    expect(await screen.findByText('✓ Loaded 1 models from your account.')).toBeTruthy();
+
+    // The explicit pick must survive discovery — no silent rewrite to the
+    // first fetched account model.
+    const modelCombobox = screen.getByRole('combobox', { name: 'Model' });
+    expect(modelCombobox.textContent).toContain('gpt-4o');
+    expect(modelCombobox.textContent).not.toContain('account-ready-model');
+    await waitForPersist(
+      onPersist,
+      expect.objectContaining({
+        apiProtocol: 'openai',
+        model: 'gpt-4o',
+      }),
+      {},
+    );
+  });
+
   it('does not show a BYOK Test button or nag when the API key is still missing', () => {
     renderSettingsDialog({
       apiProtocol: 'anthropic',

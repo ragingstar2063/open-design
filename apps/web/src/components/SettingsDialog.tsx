@@ -1003,6 +1003,11 @@ export function SettingsDialog({
   const modelSelectRef = useRef<HTMLButtonElement | null>(null);
   const customModelInputRef = useRef<HTMLInputElement | null>(null);
   const focusByokRequiredFieldAfterProtocolSwitchRef = useRef(false);
+  // Tracks whether the current BYOK model value came from an explicit user
+  // pick (combobox selection or custom entry) rather than an auto-populated
+  // provider preset. The account-model auto-switch must never overwrite a
+  // deliberate choice, even when that choice equals the provider preset id.
+  const apiModelUserSelectedRef = useRef(false);
   const [apiModelCustomEditing, setApiModelCustomEditing] = useState(false);
   const [agentCustomModelIds, setAgentCustomModelIds] = useState<
     ReadonlySet<string>
@@ -1182,6 +1187,7 @@ export function SettingsDialog({
   };
   const setApiProtocol = (protocol: ApiProtocol) => {
     setApiModelCustomEditing(false);
+    apiModelUserSelectedRef.current = false;
     focusByokRequiredFieldAfterProtocolSwitchRef.current = true;
     setCfg((c) => switchApiProtocolConfig(c, protocol));
   };
@@ -2118,6 +2124,9 @@ export function SettingsDialog({
   useEffect(() => {
     if (cfg.mode !== 'api') return;
     if (apiModelCustomEditing) return;
+    // Respect an explicit user pick — even when it equals the provider preset
+    // id, the user deliberately chose it and discovery must not rewrite it.
+    if (apiModelUserSelectedRef.current) return;
     if (fetchedApiModelOptions.length === 0) return;
     const currentModel = cfg.model.trim();
     if (currentModel && fetchedApiModelIds.has(currentModel)) return;
@@ -3511,6 +3520,7 @@ export function SettingsDialog({
                 azureModelFetchHint={t('settings.azureModelFetchHint')}
                 onCustomModelChange={(value) => updateApiConfig({ model: value })}
                 onCustomModelSelect={() => {
+                  apiModelUserSelectedRef.current = true;
                   setApiModelCustomEditing(true);
                   updateApiConfig({ model: '' });
                 }}
@@ -3527,6 +3537,7 @@ export function SettingsDialog({
                   }
                 }}
                 onModelSelect={(nextValue) => {
+                  apiModelUserSelectedRef.current = true;
                   setApiModelCustomEditing(false);
                   updateApiConfig({ model: nextValue });
                 }}
