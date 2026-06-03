@@ -232,6 +232,42 @@ export function connectorMentionPresent(prompt: string, name: string): boolean {
 }
 
 /**
+ * Index of the first inline mention for `token` using the SAME boundary rule
+ * the renderer applies to a KNOWN entity token: a left boundary is required
+ * but the right boundary is NOT. `buildInlineMentionParts()` treats a known
+ * token as an atomic chip and lets whatever follows (including space-less CJK
+ * prose like `@Notion你好`) be plain text, so a strict right-boundary check
+ * would disagree with the rendered chip. Returns -1 when absent.
+ */
+function findRenderedMentionIndex(text: string, token: string): number {
+  if (!token || token === '@') return -1;
+  let from = 0;
+  let start = text.indexOf(token, from);
+  while (start !== -1) {
+    if (isMentionBoundary(text, start)) return start;
+    from = start + 1;
+    start = text.indexOf(token, from);
+  }
+  return -1;
+}
+
+/**
+ * Whether `prompt` still carries any of an entity's candidate mention tokens
+ * as a chip the renderer would draw. Submit-time context filtering keys off
+ * this so it agrees with `buildInlineMentionParts()`: it accepts every alias
+ * the entity is registered under (e.g. a connector/MCP `@name` AND `@id`) and
+ * uses the renderer's left-boundary-only rule so CJK-after-mention chips count
+ * as present. Pass the same names that `buildHomeMentionEntities()` registers.
+ */
+export function mentionContextPresent(prompt: string, names: Array<string | null | undefined>): boolean {
+  for (const name of names) {
+    if (!name) continue;
+    if (findRenderedMentionIndex(prompt, inlineMentionToken(name)) !== -1) return true;
+  }
+  return false;
+}
+
+/**
  * Remove the first standalone `@name` mention from `prompt`, collapsing the
  * whitespace it leaves behind. Returns the prompt unchanged when absent.
  */

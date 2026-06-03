@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildInlineMentionParts, type InlineMentionEntity } from '../../src/utils/inlineMentions';
+import {
+  buildInlineMentionParts,
+  mentionContextPresent,
+  type InlineMentionEntity,
+} from '../../src/utils/inlineMentions';
 
 describe('buildInlineMentionParts', () => {
   it('skips entity matching when plain text has no mention marker', () => {
@@ -45,5 +49,35 @@ describe('buildInlineMentionParts', () => {
         },
       },
     ]);
+  });
+});
+
+describe('mentionContextPresent', () => {
+  it('counts a mention immediately followed by CJK prose as present', () => {
+    // The renderer draws `@Notion你好` as the `@Notion` chip plus plain text,
+    // so submit-time filtering must agree and keep the context (#3555).
+    expect(mentionContextPresent('@Notion你好', ['Notion'])).toBe(true);
+    // The renderer still draws the chip when followed by CJK, so present.
+    const parts = buildInlineMentionParts('@Notion你好', [
+      { id: 'notion', kind: 'connector', label: 'Notion' },
+    ]);
+    expect(parts?.[0]).toMatchObject({ kind: 'mention', text: '@Notion' });
+  });
+
+  it('matches any registered alias, including an id distinct from the label', () => {
+    // Connectors / MCP register both `@name`/`@label` AND `@id`, so a prompt
+    // that mentions the id alias must still resolve the context (#3555).
+    expect(mentionContextPresent('@my-server please', ['My Server', 'my-server'])).toBe(true);
+    // The label alias on its own would not match the id-only prompt.
+    expect(mentionContextPresent('@my-server please', ['My Server'])).toBe(false);
+  });
+
+  it('requires a left boundary like the renderer', () => {
+    expect(mentionContextPresent('email user@Notion.com', ['Notion'])).toBe(false);
+    expect(mentionContextPresent('ping @Notion', ['Notion'])).toBe(true);
+  });
+
+  it('ignores empty or missing candidate names', () => {
+    expect(mentionContextPresent('@Notion', [null, undefined, ''])).toBe(false);
   });
 });

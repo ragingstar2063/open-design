@@ -50,7 +50,7 @@ import type {
   PromptTemplateSummary,
   SkillSummary,
 } from '../types';
-import { connectorMentionPresent, inlineMentionToken } from '../utils/inlineMentions';
+import { inlineMentionToken, mentionContextPresent } from '../utils/inlineMentions';
 import { HomeHero } from './HomeHero';
 import { findChip, HOME_HERO_CHIPS, type HomeHeroChip } from './home-hero/chips';
 import {
@@ -1231,7 +1231,7 @@ export function HomeView({
     // context — otherwise a connector/plugin the user removed would silently
     // keep getting sent to the agent.
     const contextPlugins = selectedPluginContexts
-      .filter((item) => connectorMentionPresent(trimmed, item.record.title))
+      .filter((item) => mentionContextPresent(trimmed, [item.record.title]))
       .map((item) => ({
         id: item.record.id,
         title: item.record.title,
@@ -1240,7 +1240,9 @@ export function HomeView({
           : {}),
       }));
     const contextMcpServers = selectedMcpContexts
-      .filter((item) => connectorMentionPresent(trimmed, item.server.label || item.server.id))
+      .filter((item) =>
+        mentionContextPresent(trimmed, [item.server.label || item.server.id, item.server.id]),
+      )
       .map((item) => ({
         id: item.server.id,
         ...(item.server.label ? { label: item.server.label } : {}),
@@ -1249,7 +1251,9 @@ export function HomeView({
         ...(item.server.command ? { command: item.server.command } : {}),
       }));
     const contextConnectors = selectedConnectorContexts
-      .filter((item) => connectorMentionPresent(trimmed, item.connector.name))
+      .filter((item) =>
+        mentionContextPresent(trimmed, [item.connector.name, item.connector.id]),
+      )
       .map((item) => ({
         id: item.connector.id,
         name: item.connector.name,
