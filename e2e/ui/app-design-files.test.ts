@@ -58,7 +58,7 @@ const designFileFlows = new Set([
 ]);
 
 for (const entry of automatedUiScenarios().filter((scenario) => designFileFlows.has(scenario.flow ?? ''))) {
-  test(`${entry.id}: ${entry.title}`, async ({ page }) => {
+  test(`[${designFileScenarioPriority(entry)}] ${entry.id}: ${entry.title}`, async ({ page }) => {
     await page.route('**/api/agents', async (route) => {
       await route.fulfill({
         json: {
@@ -463,4 +463,17 @@ function homeDesignCard(page: Page, name: string): Locator {
   return page.locator('.design-card', {
     has: page.locator('.design-card-name', { hasText: name }),
   });
+}
+
+function designFileScenarioPriority(entry: UiScenario): 'P0' | 'P1' {
+  switch (entry.flow) {
+    case 'design-files-upload':
+    case 'design-files-delete':
+    case 'design-files-tab-persistence':
+      return 'P0';
+    case 'uploaded-image-renders-in-preview':
+    case 'python-source-preview':
+    default:
+      return 'P1';
+  }
 }

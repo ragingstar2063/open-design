@@ -138,7 +138,9 @@ function baseStorageConfig() {
   };
 }
 
-test('AMR card shows Sign in when logged out, flips to Signed in after the daemon writes config, and back to Sign in on Sign out', async ({ page }) => {
+test('[P1] AMR card shows Sign in when logged out, flips to Signed in after the daemon writes config, and back to Sign in on Sign out', async ({
+  page,
+}) => {
   const state: VelaMockState = { loggedIn: false };
   await wireDaemonMocks(page, state);
 

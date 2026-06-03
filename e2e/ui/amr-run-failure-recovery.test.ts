@@ -18,35 +18,43 @@ import {
 } from '@/playwright/amr';
 
 let codexRuntime: Awaited<ReturnType<typeof createFakeAgentRuntimes>>['codex'];
+const ACTIVE_ARTIFACT_PREVIEW_SELECTOR = '[data-testid="artifact-preview-frame"]:visible, [data-testid="artifact-preview-frame-url-load"]:visible, [data-testid="artifact-preview-frame-srcdoc"]:visible, [data-testid="live-artifact-preview-frame"]:visible';
 
 test.describe.configure({ mode: 'serial' });
+
+function artifactPreview(page: Page) {
+  return page.locator(ACTIVE_ARTIFACT_PREVIEW_SELECTOR).first();
+}
+
+function artifactPreviewFrame(page: Page) {
+  return page.frameLocator(ACTIVE_ARTIFACT_PREVIEW_SELECTOR);
+}
 
 test.beforeAll(async () => {
   codexRuntime = (await createFakeAgentRuntimes(['codex'])).codex;
 });
 
-test('AMR auth failures surface a clear error and return the composer to a usable idle state', async ({ page }) => {
+test('[P0] AMR auth failures surface a clear error and return the composer to a usable idle state', async ({ page }) => {
   const amr = await setupAmrWorkspace(page, { failAuthAtPrompt: true, selectedAgentId: 'amr' });
 
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR auth failure smoke');
 
-  await expect(page.locator('.msg.error')).toContainText(/sign in again|expired|ACP session exited before completion/i, { timeout: 15_000 });
+  await expect(page.locator('.msg.error')).toContainText(/authorize|sign in again|expired|ACP session exited before completion/i, { timeout: 15_000 });
   const input = page.getByTestId('chat-composer-input');
   await expect(input).toBeVisible();
   await input.fill('Retry after AMR auth failure');
   await expect(page.getByTestId('chat-send')).toBeEnabled();
 });
 
-test('after an AMR failure the user can switch to Codex and complete a fresh run', async ({ page }) => {
+test('[P0] after an AMR failure the user can switch to Codex and complete a fresh run', async ({ page }) => {
   const amr = await setupAmrWorkspace(page, { failAuthAtPrompt: true, selectedAgentId: 'amr' });
 
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR auth failure before switch smoke');
-  await expect(page.locator('.msg.error')).toContainText(/sign in again|expired|ACP session exited before completion/i, { timeout: 15_000 });
+  await expect(page.locator('.msg.error')).toContainText(/authorize|sign in again|expired|ACP session exited before completion/i, { timeout: 15_000 });
 
   const settings = await openSettingsDialog(page);
-  await settings.getByRole('tab', { name: /Local CLI/i }).click();
   await settings.getByRole('button', { name: /Codex CLI/i }).click();
   await expect
     .poll(async () => {
@@ -58,9 +66,9 @@ test('after an AMR failure the user can switch to Codex and complete a fresh run
   await expect(settings).toHaveCount(0);
 
   await sendPrompt(page, 'Create a deterministic smoke artifact');
-  await expect(page.getByTestId('artifact-preview-frame')).toBeVisible({ timeout: 20_000 });
+  await expect(artifactPreview(page)).toBeVisible({ timeout: 20_000 });
   await expect(
-    page.frameLocator('[data-testid="artifact-preview-frame"]').getByRole('heading', {
+    artifactPreviewFrame(page).getByRole('heading', {
       name: 'Real Daemon Smoke',
     }),
   ).toBeVisible();

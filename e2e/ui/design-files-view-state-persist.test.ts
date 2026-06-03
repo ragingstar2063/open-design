@@ -244,7 +244,7 @@ async function assertDefaultViewPrefs(page: Page): Promise<void> {
 // Scenario (a): Tab-away / tab-back — prefs survive remount
 // ---------------------------------------------------------------------------
 
-test('(a) view prefs survive navigating away to a file tab and back', async ({ page }) => {
+test('[P1] (a) view prefs survive navigating away to a file tab and back', async ({ page }) => {
   await gotoEntryHome(page);
   const projectId = await createBlankProject(page, 'view-state-nav-test');
   await seedProjectWithFiles(page, projectId);
@@ -282,7 +282,7 @@ test('(a) view prefs survive navigating away to a file tab and back', async ({ p
 // Scenario (b): Hard reload — prefs survive page.reload()
 // ---------------------------------------------------------------------------
 
-test('(b) view prefs survive a hard browser reload', async ({ page }) => {
+test('[P1] (b) view prefs survive a hard browser reload', async ({ page }) => {
   await gotoEntryHome(page);
   const projectId = await createBlankProject(page, 'view-state-reload-test');
   await seedProjectWithFiles(page, projectId);
@@ -313,7 +313,7 @@ test('(b) view prefs survive a hard browser reload', async ({ page }) => {
 // Scenario (c): Per-project key isolation — second project shows defaults
 // ---------------------------------------------------------------------------
 
-test('(c) second project view state is independent of the first project', async ({ page }) => {
+test('[P1] (c) second project view state is independent of the first project', async ({ page }) => {
   // --- Project A: set non-default prefs ---
   await gotoEntryHome(page);
   const projectAId = await createBlankProject(page, 'view-state-project-a');
