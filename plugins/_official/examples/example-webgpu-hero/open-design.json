@@ -75,7 +75,7 @@
     "taskKind": "new-generation",
     "mode": "prototype",
     "scenario": "design",
-    "surface": "prototype",
+    "surface": "web",
     "preview": {
       "type": "html",
       "entry": "./example.html"
