@@ -267,7 +267,24 @@ describe('EntryShell onboarding Open Design AMR runtime', () => {
     await act(async () => {});
 
     await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith('/api/integrations/vela/login', { method: 'POST' });
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/integrations/vela/login',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: expect.any(String),
+        }),
+      );
+    });
+    const loginInit = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith('/api/integrations/vela/login'),
+    )?.[1] as RequestInit;
+    expect(JSON.parse(String(loginInit.body))).toMatchObject({
+      attribution: {
+        entryId: expect.stringMatching(/^od-amr-/u),
+        sourceProduct: 'open_design',
+        sourceDetail: 'onboarding_amr_sign_in_continue',
+      },
     });
     expect(screen.getByText('Signing in…')).toBeTruthy();
     expect(screen.queryByText('Not signed in')).toBeNull();
@@ -341,7 +358,14 @@ describe('EntryShell onboarding Open Design AMR runtime', () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(fetchMock).toHaveBeenCalledWith('/api/integrations/vela/login', { method: 'POST' });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/integrations/vela/login',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: expect.any(String),
+      }),
+    );
     expect(screen.getByText('Signing in…')).toBeTruthy();
 
     await act(async () => {

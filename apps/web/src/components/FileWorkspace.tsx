@@ -1056,6 +1056,8 @@ export function FileWorkspace({
                 : undefined
             }
             onLaunchTerminalAuth={onLaunchTerminalAuth}
+            amrAuthorizeSourceDetail="generation_preview_authorize_retry"
+            amrRechargeSourceDetail="generation_preview_recharge"
             amrGuidance={
               generationPreview.promoteAmrSwitch
                 && generationPreview.errorCode
@@ -1068,6 +1070,7 @@ export function FileWorkspace({
                   conversationId={conversationId ?? null}
                   assistantMessageId={generationPreview.retryTarget.id}
                   runId={generationPreview.retryTarget.runId ?? null}
+                  sourceDetail="generation_preview_switch_retry_card"
                   onActivate={() => onAuthorizeAndRetry(generationPreview.retryTarget!)}
                 />
               ) : undefined

@@ -55,6 +55,9 @@ import {
   cancelVelaLogin,
   forgetVelaLogin,
   mergeVelaEnv,
+  mirrorAmrEntryAnalytics,
+  parseAmrEntryAnalyticsPayload,
+  parseVelaLoginAttribution,
   readVelaCredentialRevision,
   readVelaLoginStatus,
   spawnVelaLogin,
@@ -6287,11 +6290,12 @@ export async function startServer({
     }
   });
 
-  app.post('/api/integrations/vela/login', async (_req, res) => {
+  app.post('/api/integrations/vela/login', async (req, res) => {
     try {
       const appConfig = await readAppConfig(RUNTIME_DATA_DIR);
       const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
-      const spawned = await spawnVelaLogin({ configuredEnv });
+      const attribution = parseVelaLoginAttribution(req.body);
+      const spawned = await spawnVelaLogin({ configuredEnv, attribution });
       res.status(202).json(spawned);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -6308,6 +6312,19 @@ export async function startServer({
     } catch (err) {
       res.status(500).json({ error: String(err) });
     }
+  });
+
+  app.post('/api/integrations/vela/analytics-entry', async (req, res) => {
+    const payload = parseAmrEntryAnalyticsPayload(req.body);
+    if (!payload) {
+      res.status(400).json({ error: 'invalid_amr_entry_analytics' });
+      return;
+    }
+    const result = await mirrorAmrEntryAnalytics(payload, {
+      analyticsContext: readAnalyticsContext(req),
+      env: process.env,
+    });
+    res.status(202).json(result);
   });
 
   app.post('/api/integrations/vela/logout', async (_req, res) => {

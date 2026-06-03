@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import { useAnalytics } from '../analytics/provider';
-import { trackChatPanelClick } from '../analytics/events';
+import { trackChatPanelClick, trackRunFailedToastSurfaceView } from '../analytics/events';
+import { attributedAmrUrl, recordAmrEntry } from '../analytics/amr-attribution';
 import { useT } from '../i18n';
 import type { Dict } from '../i18n/types';
 import { copyToClipboard } from '../lib/copy-to-clipboard';
@@ -431,6 +432,7 @@ export function ChatPane({
   const pinnedTodoRef = useRef<HTMLDivElement | null>(null);
   const queuedSendStripRef = useRef<HTMLDivElement | null>(null);
   const didInitialScrollRef = useRef(false);
+  const runFailedToastSurfaceKeysRef = useRef<Set<string>>(new Set());
   // Tracks whether the user is glued close enough to the bottom that
   // streamed content should auto-follow. Distinct from the jump-button
   // state below, which uses a wider threshold (120px) so the affordance
@@ -517,6 +519,45 @@ export function ChatPane({
           runId: retryAssistant.runId ?? null,
         }
       : null;
+  useEffect(() => {
+    if (!displayError || !failedRunErrorEvent?.code || !retryAssistant) return;
+    // The hosted-AMR nudge owns this same surface_view when it renders below
+    // the error card. For all other failed-run guidance (AMR auth/balance,
+    // Antigravity auth/quota, upstream outage, generic retry), the chat error
+    // card itself is the visible run_failed_toast surface.
+    if (amrSwitchPayload) return;
+
+    const key = [
+      projectId ?? '',
+      activeConversationId ?? '',
+      retryAssistant.id,
+      retryAssistant.runId ?? '',
+      failedRunErrorEvent.code,
+    ].join(':');
+    if (runFailedToastSurfaceKeysRef.current.has(key)) return;
+    runFailedToastSurfaceKeysRef.current.add(key);
+
+    trackRunFailedToastSurfaceView(analytics.track, {
+      page_name: 'chat_panel',
+      area: 'chat_panel',
+      element: 'run_failed_toast',
+      error_code: failedRunErrorEvent.code,
+      project_id: projectId ?? '',
+      project_kind: projectKindForTracking,
+      conversation_id: activeConversationId,
+      assistant_message_id: retryAssistant.id,
+      run_id: retryAssistant.runId ?? null,
+    });
+  }, [
+    activeConversationId,
+    analytics.track,
+    amrSwitchPayload,
+    displayError,
+    failedRunErrorEvent?.code,
+    projectId,
+    projectKindForTracking,
+    retryAssistant,
+  ]);
   const composerDraftStorageKey = projectId && activeConversationId
     ? `od:chat-composer:draft:${projectId}:${activeConversationId}`
     : undefined;
@@ -1109,6 +1150,7 @@ export function ChatPane({
                           type="button"
                           className="chat-error-action"
                           onClick={() => {
+                            recordAmrEntry(analytics.track, 'chat_error_authorize_retry');
                             if (onSwitchToAmrAndRetry) {
                               onSwitchToAmrAndRetry(retryAssistant);
                             } else {
@@ -1142,9 +1184,17 @@ export function ChatPane({
                         <button
                           type="button"
                           className="chat-error-action"
-                          onClick={() =>
-                            window.open(AMR_RECHARGE_URL, '_blank', 'noopener,noreferrer')
-                          }
+                          onClick={() => {
+                            const attribution = recordAmrEntry(
+                              analytics.track,
+                              'chat_error_recharge',
+                            );
+                            window.open(
+                              attributedAmrUrl(AMR_RECHARGE_URL, attribution),
+                              '_blank',
+                              'noopener,noreferrer',
+                            );
+                          }}
                         >
                           {t('chat.amrError.rechargeCta')}
                         </button>
@@ -1165,6 +1215,7 @@ export function ChatPane({
               {amrSwitchPayload ? (
                 <AmrGuidance
                   {...amrSwitchPayload}
+                  sourceDetail="chat_error_switch_retry_card"
                   onActivate={() => {
                     if (retryAssistant && onSwitchToAmrAndRetry) {
                       onSwitchToAmrAndRetry(retryAssistant);

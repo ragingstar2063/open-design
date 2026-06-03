@@ -10,6 +10,7 @@
  *                 non-zero (tail appended to the error message).
  */
 import type { AgentEvent, ChatCommentAttachment, ChatMessage } from '../types';
+import type { AmrEntryAttribution } from '../analytics/amr-attribution';
 import type {
   ChatAnalyticsHints,
   ChatRunCreateResponse,
@@ -537,9 +538,15 @@ export interface StartVelaLoginResult {
   error?: string;
 }
 
-export async function startVelaLogin(): Promise<StartVelaLoginResult> {
+export async function startVelaLogin(
+  attribution?: AmrEntryAttribution | null,
+): Promise<StartVelaLoginResult> {
   try {
-    const resp = await fetch('/api/integrations/vela/login', { method: 'POST' });
+    const resp = await fetch('/api/integrations/vela/login', {
+      method: 'POST',
+      headers: attribution ? { 'Content-Type': 'application/json' } : undefined,
+      body: attribution ? JSON.stringify({ attribution }) : undefined,
+    });
     if (resp.ok) {
       const body = (await resp.json()) as { pid?: number };
       return { ok: true, status: resp.status, pid: body.pid };
