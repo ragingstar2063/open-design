@@ -112,6 +112,12 @@ interface ActivePlugin {
 
 interface SelectedPluginContext {
   record: InstalledPluginRecord;
+  // True when the entry was added through a path that injects an `@mention`
+  // into the prompt (the "+" menu / inline `@` picker). The submit-time filter
+  // only drops mention-backed entries whose chip the user later deleted.
+  // Non-mention paths ("Use" / "Use from details") leave this false so the
+  // context keeps round-tripping even though no token exists in the prompt.
+  mentionBacked: boolean;
 }
 
 interface SelectedMcpContext {
@@ -774,7 +780,7 @@ export function HomeView({
     let shouldFocusOnly = true;
     setSelectedPluginContexts((prev) => {
       if (prev.some((item) => item.record.id === record.id)) return prev;
-      return [...prev, { record }];
+      return [...prev, { record, mentionBacked: false }];
     });
     if (action === 'use-with-query') {
       const queryPrompt = renderPluginContextPrompt(record, inputs);
@@ -863,9 +869,12 @@ export function HomeView({
   }, [pendingPluginUseHandoff, pluginsLoading, plugins]);
 
   function addPluginContext(record: InstalledPluginRecord, nextPrompt: string | null) {
+    // A non-null nextPrompt means the picker injected an `@mention`; a null one
+    // (older entry points) records the context without a token.
+    const mentionBacked = nextPrompt !== null;
     setSelectedPluginContexts((prev) => {
       if (prev.some((item) => item.record.id === record.id)) return prev;
-      return [...prev, { record }];
+      return [...prev, { record, mentionBacked }];
     });
     if (nextPrompt !== null) setPrompt(nextPrompt);
     setError(null);
@@ -1229,9 +1238,14 @@ export function HomeView({
     // Only forward a context whose `@mention` still exists in the prompt text.
     // Deleting the inline chip removes the mention, which must also drop the
     // context — otherwise a connector/plugin the user removed would silently
-    // keep getting sent to the agent.
+    // keep getting sent to the agent. Entries added through the older "Use" /
+    // "Use from details" paths never inject a mention (mentionBacked === false),
+    // so they always round-trip rather than vanishing at submit time.
     const contextPlugins = selectedPluginContexts
-      .filter((item) => mentionContextPresent(trimmed, [item.record.title]))
+      .filter(
+        (item) =>
+          !item.mentionBacked || mentionContextPresent(trimmed, [item.record.title]),
+      )
       .map((item) => ({
         id: item.record.id,
         title: item.record.title,
