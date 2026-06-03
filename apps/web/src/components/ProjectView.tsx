@@ -4407,10 +4407,10 @@ export function ProjectView({
   ): number => {
     const next = clampChatPanelWidth(preferredWidth, maxWidth);
     chatPanelWidthRef.current = next;
-    applySplitChatPanelWidth(splitRef.current, next);
+    applySplitChatPanelWidth(splitRef.current, next, workspacePanelTrack);
     if (options.commitState !== false) setChatPanelWidth(next);
     return next;
-  }, []);
+  }, [workspacePanelTrack]);
 
   const applyChatPanelWidth = useCallback((
     width: number,
@@ -4441,8 +4441,8 @@ export function ProjectView({
 
   useEffect(() => {
     chatPanelWidthRef.current = chatPanelWidth;
-    applySplitChatPanelWidth(splitRef.current, chatPanelWidth);
-  }, [chatPanelWidth]);
+    applySplitChatPanelWidth(splitRef.current, chatPanelWidth, workspacePanelTrack);
+  }, [chatPanelWidth, workspacePanelTrack]);
 
   useEffect(() => {
     chatPanelMaxWidthRef.current = chatPanelMaxWidth;
