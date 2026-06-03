@@ -136,6 +136,9 @@ export const QuestionFormView = forwardRef<QuestionFormHandle, Props>(function Q
             <div key={q.id} className="qf-field">
               <label className="qf-label">
                 <span>{q.label}</span>
+                {q.required ? (
+                  <span className="qf-required" aria-label={t('qf.required')}>*</span>
+                ) : null}
               </label>
               {q.help ? <div className="qf-help">{q.help}</div> : null}
               {q.type === 'radio' && q.options ? (
