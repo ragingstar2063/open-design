@@ -59,6 +59,7 @@ export interface InstallProgressEvent {
 export interface InstallSuccessEvent {
   kind: 'success';
   plugin: InstalledPluginRecord;
+  plugins: InstalledPluginRecord[];
   warnings: string[];
 }
 
@@ -779,10 +780,15 @@ export async function* installFromLocalFolder(
         await upsertPluginLockfileEntry(opts.lockfilePath, child.record);
       }
     }
-    for (const child of bundleChildren.records) {
-      recordInstallEvent(opts, child.record, warnings);
+    for (const record of [bundleRecord, ...bundleChildren.records.map((child) => child.record)]) {
+      recordInstallEvent(opts, record, warnings);
     }
-    yield { kind: 'success', plugin: bundleRecord, warnings };
+    yield {
+      kind: 'success',
+      plugin: bundleRecord,
+      plugins: [bundleRecord, ...bundleChildren.records.map((child) => child.record)],
+      warnings,
+    };
     return;
   }
 
@@ -794,7 +800,7 @@ export async function* installFromLocalFolder(
 
   recordInstallEvent(opts, parsed.record, warnings);
 
-  yield { kind: 'success', plugin: parsed.record, warnings };
+  yield { kind: 'success', plugin: parsed.record, plugins: [parsed.record], warnings };
 }
 
 export interface UninstallResult {

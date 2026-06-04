@@ -9466,12 +9466,14 @@ export async function startServer({
       const warnings = [];
       const log = [];
       let plugin = null;
+      let plugins = [];
       let message = 'Install finished.';
       for await (const ev of installPlugin(db, { source: folder, roots: PLUGIN_REGISTRY_ROOTS })) {
         if (ev.message) log.push(ev.message);
         if (Array.isArray(ev.warnings)) warnings.splice(0, warnings.length, ...ev.warnings);
         if (ev.kind === 'success') {
           plugin = ev.plugin;
+          plugins = ev.plugins ?? [ev.plugin];
           message = `Installed ${ev.plugin.title}.`;
           break;
         }
@@ -9480,7 +9482,7 @@ export async function startServer({
           break;
         }
       }
-      res.status(plugin ? 200 : 400).json({ ok: Boolean(plugin), plugin, warnings, message, log });
+      res.status(plugin ? 200 : 400).json({ ok: Boolean(plugin), plugin, plugins, warnings, message, log });
     } catch (err) {
       const code = err && err.code;
       const status = code === 'ENOENT' || code === 'ENOTDIR' ? 404 : 400;

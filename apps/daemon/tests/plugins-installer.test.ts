@@ -239,15 +239,25 @@ describe('installFromLocalFolder', () => {
     const bundleRoot = await writeBundleFixture('my-bundle');
 
     const successIds: string[] = [];
+    const successPluginIds: string[][] = [];
     for await (const ev of installFromLocalFolder(db, {
       source: bundleRoot,
       roots: { userPluginsRoot: pluginsRoot },
     })) {
-      if (ev.kind === 'success') successIds.push(ev.plugin.id);
+      if (ev.kind === 'success') {
+        successIds.push(ev.plugin.id);
+        successPluginIds.push(ev.plugins.map((plugin) => plugin.id).sort());
+      }
       if (ev.kind === 'error') throw new Error(ev.message);
     }
 
     expect(successIds).toEqual(['my-bundle']);
+    expect(successPluginIds).toEqual([[
+      'my-bundle',
+      'my-bundle/deck-pacing',
+      'my-bundle/deck-skeleton',
+      'my-bundle/linear-clone',
+    ]]);
     const rows = listInstalledPlugins(db);
     expect(rows.map((row) => row.id).sort()).toEqual([
       'my-bundle',
@@ -278,6 +288,56 @@ describe('installFromLocalFolder', () => {
     expect(result.ok).toBe(true);
     expect(listInstalledPlugins(db)).toHaveLength(0);
     await expect(stat(installedFolder)).rejects.toThrow();
+  });
+
+  it('upgrading a bundle child emits one success event with the full installed set', async () => {
+    const bundleRoot = await writeBundleFixture('upgrade-bundle', {
+      version: '1.0.0',
+    });
+
+    for await (const ev of installFromLocalFolder(db, {
+      source: bundleRoot,
+      roots: { userPluginsRoot: pluginsRoot },
+    })) {
+      if (ev.kind === 'error') throw new Error(ev.message);
+    }
+
+    await writeBundleFixture('upgrade-bundle', {
+      version: '2.0.0',
+    });
+
+    const successEvents: Array<{ root: string; plugins: string[]; version: string }> = [];
+    for await (const ev of installPlugin(db, {
+      source: bundleRoot,
+      roots: { userPluginsRoot: pluginsRoot },
+      eventKind: 'upgraded',
+    })) {
+      if (ev.kind === 'success') {
+        successEvents.push({
+          root: ev.plugin.id,
+          plugins: ev.plugins.map((plugin) => plugin.id).sort(),
+          version: ev.plugin.version,
+        });
+      }
+      if (ev.kind === 'error') throw new Error(ev.message);
+    }
+
+    expect(successEvents).toEqual([{
+      root: 'upgrade-bundle',
+      plugins: [
+        'upgrade-bundle',
+        'upgrade-bundle/deck-pacing',
+        'upgrade-bundle/deck-skeleton',
+        'upgrade-bundle/linear-clone',
+      ],
+      version: '2.0.0',
+    }]);
+    expect(listInstalledPlugins(db).map((row) => `${row.id}@${row.version}`).sort()).toEqual([
+      'upgrade-bundle/deck-pacing@2.0.0',
+      'upgrade-bundle/deck-skeleton@2.0.0',
+      'upgrade-bundle/linear-clone@2.0.0',
+      'upgrade-bundle@2.0.0',
+    ]);
   });
 
   it('rejects unsafe bundle child paths without leaving registry rows', async () => {
@@ -327,6 +387,7 @@ async function writeBundleFixture(
   overrides: {
     skills?: Array<{ id: string; path: string }>;
     skillContext?: boolean;
+    version?: string;
   } = {},
 ): Promise<string> {
   const bundleRoot = path.join(tmpRoot, id);
@@ -336,7 +397,7 @@ async function writeBundleFixture(
   await writeFile(path.join(bundleRoot, 'SKILL.md'), `# ${id}\n`);
   await writeFile(path.join(bundleRoot, 'open-design.json'), JSON.stringify({
     name: id,
-    version: '1.0.0',
+    version: overrides.version ?? '1.0.0',
     title: 'Deck Bundle',
     od: {
       kind: 'bundle',
@@ -356,7 +417,7 @@ async function writeBundleFixture(
   ].join('\n'));
   await writeFile(path.join(bundleRoot, 'skills', 'deck-skeleton', 'open-design.json'), JSON.stringify({
     name: 'deck-skeleton',
-    version: '1.0.0',
+    version: overrides.version ?? '1.0.0',
     title: 'Deck Skeleton',
     ...(overrides.skillContext ? {
       od: {

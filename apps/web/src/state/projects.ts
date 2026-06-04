@@ -681,6 +681,7 @@ interface PluginInstallEvent {
   phase?: string;
   message?: string;
   plugin?: InstalledPluginRecord;
+  plugins?: InstalledPluginRecord[];
   warnings?: string[];
 }
 
@@ -706,17 +707,22 @@ export async function installPluginSource(source: string): Promise<PluginInstall
     }
 
     let success: InstalledPluginRecord | undefined;
+    let installedPlugins: InstalledPluginRecord[] | undefined;
     let warnings: string[] = [];
     let errorMessage: string | undefined;
     for await (const ev of readServerSentEvents(resp.body)) {
       if (ev.message) log.push(ev.message);
       if (ev.warnings) warnings = ev.warnings;
-      if (ev.kind === 'success') success = ev.plugin;
+      if (ev.kind === 'success') {
+        success = ev.plugin;
+        installedPlugins = ev.plugins;
+      }
       if (ev.kind === 'error') errorMessage = ev.message ?? 'Install failed.';
     }
     return {
       ok: Boolean(success) && !errorMessage,
       plugin: success,
+      ...(installedPlugins ? { plugins: installedPlugins } : {}),
       warnings,
       message: errorMessage ?? (success ? `Installed ${success.title}.` : 'Install finished.'),
       log,
@@ -991,17 +997,22 @@ export async function upgradePlugin(id: string): Promise<PluginInstallOutcome> {
       };
     }
     let success: InstalledPluginRecord | undefined;
+    let installedPlugins: InstalledPluginRecord[] | undefined;
     let warnings: string[] = [];
     let errorMessage: string | undefined;
     for await (const ev of readServerSentEvents(resp.body)) {
       if (ev.message) log.push(ev.message);
       if (ev.warnings) warnings = ev.warnings;
-      if (ev.kind === 'success') success = ev.plugin;
+      if (ev.kind === 'success') {
+        success = ev.plugin;
+        installedPlugins = ev.plugins;
+      }
       if (ev.kind === 'error') errorMessage = ev.message ?? 'Upgrade failed.';
     }
     return {
       ok: Boolean(success) && !errorMessage,
       plugin: success,
+      ...(installedPlugins ? { plugins: installedPlugins } : {}),
       warnings,
       message: errorMessage ?? (success ? `Upgraded ${success.title}.` : 'Upgrade finished.'),
       log,
@@ -1029,6 +1040,7 @@ async function postPluginUpload(url: string, form: FormData): Promise<PluginInst
       return {
         ok: true,
         plugin: json.plugin,
+        ...(json.plugins ? { plugins: json.plugins } : {}),
         warnings: json.warnings ?? [],
         message: json.message ?? 'Plugin installed.',
         log: json.log ?? [],
@@ -1062,6 +1074,7 @@ async function readPluginInstallOutcome(resp: Response): Promise<PluginInstallOu
     return {
       ok: true,
       ...(json.plugin ? { plugin: json.plugin } : {}),
+      ...(json.plugins ? { plugins: json.plugins } : {}),
       warnings: json.warnings ?? [],
       message: json.message ?? 'Plugin installed.',
       log: json.log ?? [],

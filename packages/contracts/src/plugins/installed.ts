@@ -61,15 +61,23 @@ export const PluginInstallSourceSchema = z.object({
 
 export type PluginInstallSource = z.infer<typeof PluginInstallSourceSchema>;
 
-export const PluginInstallOutcomeSchema = z.object({
+export interface PluginInstallOutcome {
+  ok: boolean;
+  plugin?: InstalledPluginRecord | null | undefined;
+  plugins?: InstalledPluginRecord[] | undefined;
+  warnings: string[];
+  message?: string | undefined;
+  log: string[];
+}
+
+export const PluginInstallOutcomeSchema: z.ZodType<PluginInstallOutcome, z.ZodTypeDef, unknown> = z.object({
   ok:       z.boolean(),
   plugin:   InstalledPluginRecordSchema.nullable().optional(),
+  plugins:  z.array(InstalledPluginRecordSchema).optional(),
   warnings: z.array(z.string()),
   message:  z.string().optional(),
   log:      z.array(z.string()),
 });
-
-export type PluginInstallOutcome = z.infer<typeof PluginInstallOutcomeSchema>;
 
 export const ProjectPluginFolderInstallRequestSchema = z.object({
   path: z.string().min(1),
