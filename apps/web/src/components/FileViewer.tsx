@@ -8735,7 +8735,7 @@ function HtmlViewer({
                   void handleImageExportSave();
                 }}
               >
-                {imageExportBusy || imageExportPreparing ? t('fileViewer.exportImageSaving') : t('common.save')}
+                {imageExportBusy ? t('fileViewer.exportImageSaving') : t('common.save')}
               </button>
             </div>
           </div>
