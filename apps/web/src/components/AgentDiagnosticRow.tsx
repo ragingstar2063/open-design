@@ -15,7 +15,6 @@ export interface AgentFixHandlers {
   onOpenDocs?: () => void;
   onSetEnv?: (envKey: string) => void;
   onClearEnv?: (envKey: string) => void;
-  onLaunchOAuth?: (agentId: string) => void;
 }
 
 interface Props {
@@ -69,19 +68,13 @@ function useResolveAction() {
               onClick: handlers.onRescan,
             }
           : null;
-      case 'launchOAuth':
-        return handlers.onLaunchOAuth
-          ? {
-              key: 'launchOAuth',
-              label: t('chat.antigravityError.launchTerminalCta'),
-              icon: 'external-link',
-              onClick: () => handlers.onLaunchOAuth?.(intent.agentId),
-            }
-          : null;
       // setEnv / clearEnv carry a typed envKey and are part of the contract,
-      // but their input-driven UI ships in a follow-up; render nothing here.
+      // but their input-driven UI ships in a follow-up. launchOAuth is also
+      // reserved for a future daemon-side auth producer; the chat auth banner
+      // keeps its separate Antigravity terminal action.
       case 'setEnv':
       case 'clearEnv':
+      case 'launchOAuth':
         return null;
       default:
         return null;

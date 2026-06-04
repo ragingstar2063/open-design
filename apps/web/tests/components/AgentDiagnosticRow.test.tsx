@@ -48,23 +48,4 @@ describe('AgentDiagnosticRow', () => {
     fireEvent.click(rescan);
     expect(onRescan).toHaveBeenCalledTimes(1);
   });
-
-  it('wires launchOAuth with the agent id from the intent', () => {
-    const onLaunchOAuth = vi.fn();
-    const authMissing: AgentDiagnostic = {
-      reason: 'auth-missing',
-      severity: 'error',
-      message: 'Antigravity needs to sign in.',
-      fixActions: [{ kind: 'launchOAuth', agentId: 'antigravity' }],
-    };
-    render(
-      <AgentDiagnosticRow diagnostic={authMissing} handlers={{ onLaunchOAuth }} />,
-    );
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: en['chat.antigravityError.launchTerminalCta'],
-      }),
-    );
-    expect(onLaunchOAuth).toHaveBeenCalledWith('antigravity');
-  });
 });

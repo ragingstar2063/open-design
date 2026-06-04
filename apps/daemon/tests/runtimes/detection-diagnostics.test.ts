@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from './helpers/test-helpers.js';
 import { detectAgentsStream } from '../../src/runtimes/detection.js';
+import { buildAuthDiagnostic } from '../../src/runtimes/diagnostics.js';
 
 const posixTest = process.platform === 'win32' ? test.skip : test;
 
@@ -25,6 +26,18 @@ function writeCursorAgent(dir: string, statusOutput: string): void {
       `exit 0\n`,
   );
   chmodSync(bin, 0o755);
+}
+
+function writeNonExecutableCursorAgent(dir: string): string {
+  const bin = join(dir, 'cursor-agent');
+  writeFileSync(
+    bin,
+    `#!/bin/sh\n` +
+      `if [ "$1" = "--version" ]; then echo "2026.05.07-test"; exit 0; fi\n` +
+      `exit 0\n`,
+  );
+  chmodSync(bin, 0o644);
+  return bin;
 }
 
 posixTest('detectAgents emits a not-on-path diagnostic with searched dirs + fix intents', async () => {
@@ -57,6 +70,37 @@ posixTest('detectAgents emits a not-on-path diagnostic with searched dirs + fix 
   }
 });
 
+posixTest('detectAgents emits a not-executable diagnostic for a PATH match without execute permission', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-diag-notexec-'));
+  try {
+    await withEnvSnapshot(['PATH', 'OD_AGENT_HOME'], async () => {
+      const bin = writeNonExecutableCursorAgent(dir);
+      process.env.PATH = dir;
+      process.env.OD_AGENT_HOME = dir;
+
+      const agents = await detectAgents();
+      const cursor = agents.find((agent) => agent.id === 'cursor-agent');
+
+      assert.equal(cursor?.available, false);
+      const diagnostic = cursor?.diagnostics?.[0];
+      assert.ok(diagnostic, 'expected a diagnostic on the unavailable agent');
+      assert.equal(diagnostic?.reason, 'not-executable');
+      assert.equal(diagnostic?.severity, 'error');
+      assert.equal(diagnostic?.detail, bin);
+      assert.match(diagnostic?.message ?? '', /not executable/i);
+      const intents = (diagnostic?.fixActions ?? []).map((a) => a.kind);
+      assert.ok(intents.includes('rescan'), 'expected rescan fix intent');
+      assert.equal(
+        intents.includes('openDocs'),
+        false,
+        'permission diagnostics should not use shim repair advice',
+      );
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 posixTest('detectAgents emits an auth-missing diagnostic when the auth probe reports not authenticated', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'od-diag-auth-'));
   try {
@@ -81,6 +125,19 @@ posixTest('detectAgents emits an auth-missing diagnostic when the auth probe rep
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('auth diagnostics do not offer daemon OAuth without an active producer', () => {
+  const diagnostic = buildAuthDiagnostic(
+    { id: 'antigravity', name: 'Antigravity' },
+    {
+      status: 'missing',
+      message: 'Antigravity is installed but not authenticated.',
+    },
+  );
+
+  const intents = (diagnostic?.fixActions ?? []).map((a) => a.kind);
+  assert.deepEqual(intents, ['openDocs', 'rescan']);
 });
 
 posixTest('detectAgentsStream yields the same agent set as detectAgents', async () => {

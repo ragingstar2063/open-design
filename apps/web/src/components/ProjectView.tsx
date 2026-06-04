@@ -141,6 +141,7 @@ import { filterImplicitProducedFiles } from '../produced-files';
 import { buildPptxExportPrompt } from '../lib/build-pptx-export-prompt';
 import { AvatarMenu } from './AvatarMenu';
 import { HandoffButton } from './HandoffButton';
+import { Icon } from './Icon';
 import { ProjectDesignSystemPicker } from './ProjectDesignSystemPicker';
 import { ChatPane } from './ChatPane';
 import type { ChatSendMeta } from './ChatComposer';
@@ -4220,6 +4221,23 @@ export function ProjectView({
   // resulting SSE stream.
   const critiqueTheaterEnabled = useCritiqueTheaterEnabled();
 
+  // CLI / agent selector lives below the chat conversation (composer footer),
+  // not in the top-right header.
+  const executionControls = (
+    <AvatarMenu
+      config={config}
+      agents={agents}
+      daemonLive={daemonLive}
+      onModeChange={onModeChange}
+      onAgentChange={onAgentChange}
+      onAgentModelChange={onAgentModelChange}
+      onOpenSettings={onOpenSettings}
+      onRefreshAgents={onRefreshAgents}
+      onBack={onBack}
+      placement="up"
+    />
+  );
+
   return (
     <div className="app">
       <CritiqueTheaterMount
@@ -4332,6 +4350,7 @@ export function ProjectView({
               }}
               onBack={onBack}
               backLabel={t('project.backToProjects')}
+              composerFooterAccessory={executionControls}
               projectHeader={(
                 <span className="chat-project-title-line">
                   <span
@@ -4438,18 +4457,16 @@ export function ProjectView({
           conversationId={activeConversationId}
           headerActions={(
             <>
+              <button
+                type="button"
+                className="settings-icon-btn"
+                onClick={() => onOpenSettings('execution')}
+                title={t('chat.cliSettingsTitle')}
+                aria-label={t('chat.cliSettingsAria')}
+              >
+                <Icon name="settings" size={16} />
+              </button>
               <HandoffButton projectId={project.id} />
-              <AvatarMenu
-                config={config}
-                agents={agents}
-                daemonLive={daemonLive}
-                onModeChange={onModeChange}
-                onAgentChange={onAgentChange}
-                onAgentModelChange={onAgentModelChange}
-                onOpenSettings={onOpenSettings}
-                onRefreshAgents={onRefreshAgents}
-                onBack={onBack}
-              />
             </>
           )}
         />

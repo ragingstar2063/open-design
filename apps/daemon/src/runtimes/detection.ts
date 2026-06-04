@@ -10,6 +10,7 @@ import {
   buildAuthDiagnostic,
   buildExecutableDiagnostic,
   buildNotInvocableDiagnostic,
+  type NotInvocableCause,
 } from './diagnostics.js';
 import type {
   AgentDiagnostic,
@@ -67,25 +68,20 @@ async function fetchModels(
 }
 
 type VersionProbeOutcome =
-  | { kind: 'not-invocable' }
+  | { kind: 'not-invocable'; cause: NotInvocableCause }
   | { kind: 'spawned'; version: string | null };
 
 /**
  * Run the agent's `--version` probe and classify the result. The probe
  * has two distinct failure modes the catch arm has to discriminate:
  *
- *   - **Not invocable.** The OS rejected the spawn outright (ENOENT
- *     for a vanished target, EACCES for a stripped-x bit, ENOTDIR
- *     for a broken parent), OR the wrapper script spawned but its
- *     underlying interpreter / target is missing and the shim exits
- *     with code 127 ("command not found") / 126 ("not executable").
- *     127 is the canonical POSIX shell signal for "I ran but the
- *     thing I delegate to is gone"; 126 is the perm/not-a-binary
- *     sibling. Both shapes are reproducible by leftover npm bin
- *     shims, mise/nvm/fnm pointer files, and Windows `.CMD` shims
- *     whose target was uninstalled. We mark the agent unavailable
- *     so Settings does not advertise a ghost entry (issue #658,
- *     lefarcen review P2 on PR #1301).
+ *   - **Not invocable.** The OS rejected the spawn outright, OR the
+ *     wrapper script spawned but its underlying interpreter / target
+ *     failed. We split permission failures (EACCES / exit 126) from
+ *     missing-target failures (ENOENT / ENOTDIR / exit 127) so Settings can
+ *     offer permission-specific copy instead of treating every failure as a
+ *     broken shim. We still mark the agent unavailable so Settings does not
+ *     advertise a ghost entry (issue #658, lefarcen review P2 on PR #1301).
  *
  *   - **Spawned but `--version` was unhappy.** The binary itself ran
  *     (any other rejection: timeout, generic non-zero exit, stderr
@@ -113,11 +109,17 @@ async function probeVersionAtPath(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
     if (typeof code === 'string') {
-      if (code === 'ENOENT' || code === 'EACCES' || code === 'ENOTDIR') {
-        return { kind: 'not-invocable' };
+      if (code === 'EACCES') {
+        return { kind: 'not-invocable', cause: 'not-executable' };
+      }
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return { kind: 'not-invocable', cause: 'missing-target' };
       }
     } else if (typeof code === 'number' && (code === 126 || code === 127)) {
-      return { kind: 'not-invocable' };
+      return {
+        kind: 'not-invocable',
+        cause: code === 126 ? 'not-executable' : 'missing-target',
+      };
     }
     return { kind: 'spawned', version: null };
   }
@@ -197,7 +199,9 @@ async function probe(
   );
   const outcome = await probeVersionAtPath(def, launch.launchPath, probeEnv);
   if (outcome.kind === 'not-invocable') {
-    return unavailableAgent(def, [buildNotInvocableDiagnostic(def, launch)]);
+    return unavailableAgent(def, [
+      buildNotInvocableDiagnostic(def, launch, outcome.cause),
+    ]);
   }
   // The version probe must finish first (it gates availability), but the
   // three post-version probes are independent reads — run them concurrently

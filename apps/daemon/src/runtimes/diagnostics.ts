@@ -51,13 +51,26 @@ export function buildExecutableDiagnostic(
   };
 }
 
-// A file matched but `--version` could not spawn it (exit 126/127, EACCES,
-// ENOENT on the resolved path) — almost always a leftover npm/nvm/mise shim
-// whose underlying target was uninstalled.
+export type NotInvocableCause = 'not-executable' | 'missing-target';
+
+// A file matched but `--version` could not spawn it. Permission failures are
+// real binaries that need their executable bit restored; missing-target
+// failures are usually leftover npm/nvm/mise shims whose underlying target was
+// uninstalled.
 export function buildNotInvocableDiagnostic(
   def: Pick<RuntimeAgentDef, 'id' | 'name'>,
   launch: Pick<AgentLaunchResolution, 'selectedPath' | 'launchPath'>,
+  cause: NotInvocableCause,
 ): AgentDiagnostic {
+  if (cause === 'not-executable') {
+    return {
+      reason: 'not-executable',
+      severity: 'error',
+      message: `${def.name} was found but is not executable. Restore its execute permission or choose a different binary, then rescan.`,
+      ...(launch.launchPath ? { detail: launch.launchPath } : {}),
+      fixActions: [...setEnvIntent(def.id), { kind: 'rescan' }],
+    };
+  }
   return {
     reason: 'shim-broken',
     severity: 'error',
@@ -68,18 +81,15 @@ export function buildNotInvocableDiagnostic(
 }
 
 // The agent is installed and invocable but its auth probe reported a
-// missing / unverifiable credential. `launchOAuth` is only offered for
-// adapters whose interactive sign-in the daemon can drive (today antigravity
-// via the system-terminal endpoint); everyone else points at docs.
+// missing / unverifiable credential. Detection only reaches this helper for
+// adapters that declare a cheap, side-effect-free authProbe; until an adapter
+// also declares a daemon-safe OAuth producer, diagnostics point at docs.
 export function buildAuthDiagnostic(
   def: Pick<RuntimeAgentDef, 'id' | 'name'>,
   auth: AgentAuthProbeResult,
 ): AgentDiagnostic | null {
   if (auth.status === 'ok') return null;
-  const signInIntent: AgentFixIntent =
-    def.id === 'antigravity'
-      ? { kind: 'launchOAuth', agentId: def.id }
-      : { kind: 'openDocs' };
+  const signInIntent: AgentFixIntent = { kind: 'openDocs' };
   if (auth.status === 'missing') {
     return {
       reason: 'auth-missing',

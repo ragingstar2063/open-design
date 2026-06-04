@@ -126,11 +126,23 @@ export async function fetchAgentsStream(args: {
   const decoder = new TextDecoder();
   let buffer = '';
   let done = false;
+  const errorMessageFromData = (data: string): string => {
+    if (!data.trim()) return 'agents stream error';
+    try {
+      const parsed = JSON.parse(data) as { error?: unknown; message?: unknown };
+      const message = parsed.error ?? parsed.message;
+      if (typeof message === 'string' && message.trim()) return message;
+    } catch {
+      // Fall through to the raw data string below.
+    }
+    return data;
+  };
 
   const handleEvent = (rawEvent: string) => {
-    // Each SSE record is `event: <name>\ndata: <json>`; we only act on
-    // `agent` (one AgentInfo) and `done` (terminal). Unknown events are
-    // ignored so the protocol can grow without breaking older clients.
+    // Each SSE record is `event: <name>\ndata: <json>`; we act on `agent`
+    // (one AgentInfo), `error` (terminal failure), and `done` (terminal
+    // success). Unknown events are ignored so the protocol can grow without
+    // breaking older clients.
     let eventName = 'message';
     const dataLines: string[] = [];
     for (const line of rawEvent.split('\n')) {
@@ -141,6 +153,9 @@ export async function fetchAgentsStream(args: {
     if (eventName === 'done') {
       done = true;
       return;
+    }
+    if (eventName === 'error') {
+      throw new Error(errorMessageFromData(data));
     }
     if (eventName === 'agent' && data) {
       try {
@@ -167,12 +182,18 @@ export async function fetchAgentsStream(args: {
         if (done) break;
       }
     }
+    if (!done && buffer.trim().length > 0) {
+      handleEvent(buffer);
+    }
   } finally {
     try {
       await reader.cancel();
     } catch {
       // Reader may already be closed; nothing to do.
     }
+  }
+  if (!done) {
+    throw new Error('agents stream ended before done');
   }
   return collected;
 }
