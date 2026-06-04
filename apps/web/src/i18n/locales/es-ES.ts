@@ -3,6 +3,13 @@ import { en } from './en';
 
 export const esES: Dict = {
   ...en,
+  'homeHero.addMenu': 'Añadir contexto',
+  'homeHero.addPlugin': 'Añadir plugin',
+  'homeHero.addConnectors': 'Añadir conectores',
+  'homeHero.addMcp': 'Añadir servidor MCP',
+  'homeHero.noPlugins': 'No hay plugins instalados',
+  'homeHero.noMcp': 'No hay servidores MCP',
+  'homeHero.noConnectors': 'No hay conectores conectados',
   'chat.amrCard.switchTitle': 'Falló la llamada al modelo — esta ejecución está en pausa',
   'chat.amrCard.switchBody': 'Cambia al servicio oficial de modelos AMR de Open Design — sin configurar API Key. Tras iniciar sesión, autorizar y recargar, esta ejecución se reintentará automáticamente.',
   'chat.amrCard.chipOfficial': 'Alojamiento oficial',

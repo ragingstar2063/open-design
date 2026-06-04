@@ -809,6 +809,13 @@ export interface Dict {
   'homeHero.placeholder': string;
   'homeHero.placeholderActive': string;
   'homeHero.skills': string;
+  'homeHero.addMenu': string;
+  'homeHero.addPlugin': string;
+  'homeHero.addConnectors': string;
+  'homeHero.addMcp': string;
+  'homeHero.noPlugins': string;
+  'homeHero.noMcp': string;
+  'homeHero.noConnectors': string;
   'homeHero.applying': string;
   'homeHero.pluginTitle': string;
   'homeHero.pluginPrefix': string;

@@ -3,6 +3,13 @@ import type { Dict } from '../types';
 
 export const hu: Dict = {
   ...en,
+  'homeHero.addMenu': 'Kontextus hozzáadása',
+  'homeHero.addPlugin': 'Bővítmény hozzáadása',
+  'homeHero.addConnectors': 'Csatlakozók hozzáadása',
+  'homeHero.addMcp': 'MCP-kiszolgáló hozzáadása',
+  'homeHero.noPlugins': 'Nincs telepített bővítmény',
+  'homeHero.noMcp': 'Nincs MCP-kiszolgáló',
+  'homeHero.noConnectors': 'Nincs csatlakoztatott csatlakozó',
   'chat.amrCard.switchTitle': 'Sikertelen modellhívás — ez a futtatás szünetel',
   'chat.amrCard.switchBody': 'Válts az Open Design hivatalos AMR modellszolgáltatására — nincs szükség API-kulcs beállítására. Bejelentkezés, engedélyezés és feltöltés után ez a futtatás automatikusan újraindul.',
   'chat.amrCard.chipOfficial': 'Hivatalos szolgáltatás',

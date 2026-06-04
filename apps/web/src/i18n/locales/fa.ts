@@ -3,6 +3,13 @@ import { en } from './en';
 
 export const fa: Dict = {
   ...en,
+  'homeHero.addMenu': 'افزودن زمینه',
+  'homeHero.addPlugin': 'افزودن افزونه',
+  'homeHero.addConnectors': 'افزودن کانکتورها',
+  'homeHero.addMcp': 'افزودن سرور MCP',
+  'homeHero.noPlugins': 'هیچ افزونه‌ای نصب نشده است',
+  'homeHero.noMcp': 'هیچ سرور MCP وجود ندارد',
+  'homeHero.noConnectors': 'هیچ کانکتور متصلی وجود ندارد',
   'chat.amrCard.switchTitle': 'فراخوانی مدل ناموفق بود — این اجرا متوقف شد',
   'chat.amrCard.switchBody': 'به سرویس رسمی مدل AMR از Open Design سوئیچ کنید — بدون نیاز به تنظیم کلید API. پس از ورود، اعطای دسترسی و شارژ، این اجرا به‌طور خودکار دوباره انجام می‌شود.',
   'chat.amrCard.chipOfficial': 'میزبانی رسمی',

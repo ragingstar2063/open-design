@@ -3,6 +3,13 @@ import { en } from './en';
 
 export const ja: Dict = {
   ...en,
+  'homeHero.addMenu': 'コンテキストを追加',
+  'homeHero.addPlugin': 'プラグインを追加',
+  'homeHero.addConnectors': 'コネクタを追加',
+  'homeHero.addMcp': 'MCP サーバーを追加',
+  'homeHero.noPlugins': 'インストール済みのプラグインがありません',
+  'homeHero.noMcp': 'MCP サーバーがありません',
+  'homeHero.noConnectors': '接続済みのコネクタがありません',
   'chat.amrCard.switchTitle': 'モデル呼び出しに失敗しました — このタスクは一時停止中です',
   'chat.amrCard.switchBody': 'Open Design 公式の AMR モデルサービスに切り替えてください — API キーの設定は不要です。サインイン・認可・チャージが完了すると、このタスクは自動で再試行されます。',
   'chat.amrCard.chipOfficial': '公式ホスティング',

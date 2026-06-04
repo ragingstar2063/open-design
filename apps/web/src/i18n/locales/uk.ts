@@ -3,6 +3,13 @@ import { en } from './en';
 
 export const uk: Dict = {
   ...en,
+  'homeHero.addMenu': 'Додати контекст',
+  'homeHero.addPlugin': 'Додати плагін',
+  'homeHero.addConnectors': 'Додати конектори',
+  'homeHero.addMcp': 'Додати сервер MCP',
+  'homeHero.noPlugins': 'Немає встановлених плагінів',
+  'homeHero.noMcp': 'Немає серверів MCP',
+  'homeHero.noConnectors': 'Немає підключених конекторів',
   'chat.amrCard.switchTitle': 'Не вдалося викликати модель — це виконання призупинено',
   'chat.amrCard.switchBody': 'Перейдіть на офіційний сервіс моделей AMR від Open Design — без налаштування API-ключа. Після входу, авторизації та поповнення це виконання буде повторено автоматично.',
   'chat.amrCard.chipOfficial': 'Офіційний хостинг',

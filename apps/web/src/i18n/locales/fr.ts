@@ -3,6 +3,13 @@ import type { Dict } from '../types';
 
 export const fr: Dict = {
   ...en,
+  'homeHero.addMenu': 'Ajouter du contexte',
+  'homeHero.addPlugin': 'Ajouter un plugin',
+  'homeHero.addConnectors': 'Ajouter des connecteurs',
+  'homeHero.addMcp': 'Ajouter un serveur MCP',
+  'homeHero.noPlugins': 'Aucun plugin installé',
+  'homeHero.noMcp': 'Aucun serveur MCP',
+  'homeHero.noConnectors': 'Aucun connecteur connecté',
   'chat.amrCard.switchTitle': 'Échec de l\'appel du modèle — cette exécution est en pause',
   'chat.amrCard.switchBody': 'Passez au service de modèles AMR officiel d\'Open Design — aucune clé API à configurer. Après connexion, autorisation et recharge, cette exécution sera relancée automatiquement.',
   'chat.amrCard.chipOfficial': 'Hébergement officiel',
