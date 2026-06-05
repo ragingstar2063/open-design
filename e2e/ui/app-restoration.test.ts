@@ -327,7 +327,7 @@ test('[P0] visiting an uploaded design file route restores its tab and file work
   await expect(page.getByTestId('design-files-tab')).toHaveAttribute('aria-selected', 'false');
 });
 
-test('[P0] returning from an uploaded design file route to the project root keeps the uploaded file tab reachable', async ({ page }) => {
+test('[P0] returning from an uploaded design file route to the project root keeps the uploaded file tab active', async ({ page }) => {
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({
       json: {
@@ -382,7 +382,6 @@ test('[P0] returning from an uploaded design file route to the project root keep
 
   await expect(page.getByTestId('file-workspace')).toBeVisible();
   await expect(fileTab).toBeVisible();
-  await fileTab.click();
   await expect(fileTab).toHaveAttribute('aria-selected', 'true');
 });
 

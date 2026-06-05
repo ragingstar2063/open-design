@@ -4563,12 +4563,6 @@ export function ProjectView({
     if (instructionsSaving) return;
     const nextInstructions = instructionsDraft.trim();
     setInstructionsSaving(true);
-    const updated: Project = {
-      ...project,
-      customInstructions: nextInstructions || undefined,
-      updatedAt: Date.now(),
-    };
-    onProjectChange(updated);
     const saved = await patchProject(project.id, {
       customInstructions: nextInstructions || null,
     });
