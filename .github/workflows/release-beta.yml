@@ -320,6 +320,10 @@ jobs:
             echo "release-beta requires at least one target to be enabled" >&2
             exit 1
           fi
+          if [ "${{ inputs.publish }}" = "true" ] && [ "${{ inputs.enable_win_x64 }}" = "true" ] && [ "${{ inputs.win_x64_target }}" != "nsis" ] && [ "${{ inputs.win_x64_target }}" != "all" ]; then
+            echo "release-beta win_x64 publish requires win_x64_target=nsis or all" >&2
+            exit 1
+          fi
 
       - name: Validate R2 release access
         if: ${{ inputs.publish }}
@@ -667,7 +671,8 @@ jobs:
             -ReleaseVersion "${{ needs.metadata.outputs.beta_version }}" `
             -ReleaseAssetSuffix ".unsigned" `
             -ReleaseChannel beta `
-            -ReleasePublicOrigin "${{ inputs.release_public_origin != '' && inputs.release_public_origin || vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}"
+            -ReleasePublicOrigin "${{ inputs.release_public_origin != '' && inputs.release_public_origin || vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}" `
+            -IncludeZip ${{ inputs.win_x64_target == 'all' && '$true' || '$false' }}
 
       - name: Publish win_x64 platform
         if: ${{ inputs.publish }}
@@ -679,7 +684,7 @@ jobs:
           RELEASE_OUTPUTS_PATH: ${{ runner.temp }}\release-platform-outputs\win_x64.json
           RELEASE_PUBLIC_ORIGIN: ${{ inputs.release_public_origin != '' && inputs.release_public_origin || vars.CLOUDFLARE_R2_RELEASES_PUBLIC_ORIGIN }}
           RELEASE_REPORT_DIR: ${{ runner.temp }}\release-report\win_x64
-          WIN_INCLUDE_ZIP: ${{ inputs.win_x64_target == 'all' || inputs.win_x64_target == 'zip' }}
+          WIN_INCLUDE_ZIP: ${{ inputs.win_x64_target == 'all' }}
           RELEASE_SIGNED: "false"
           RELEASE_STORAGE_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_RELEASES_AK }}
           RELEASE_STORAGE_BUCKET: ${{ secrets.CLOUDFLARE_R2_RELEASES_BUCKET }}

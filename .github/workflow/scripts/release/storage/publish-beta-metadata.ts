@@ -53,8 +53,8 @@ const publicOrigin = required("RELEASE_PUBLIC_ORIGIN").replace(/\/+$/, "");
 const metadataDir = required("RELEASE_METADATA_DIR");
 const manifestDir = required("RELEASE_MANIFEST_DIR");
 const outputsPath = required("RELEASE_OUTPUTS_PATH");
-const assetVersionSuffix = optional("RELEASE_ASSET_SUFFIX");
-const versionPrefix = optional("RELEASE_VERSION_PREFIX", `${releaseChannel}/versions/${releaseVersion}${assetVersionSuffix}`);
+const requestedAssetVersionSuffix = optional("RELEASE_ASSET_SUFFIX");
+const requestedVersionPrefix = optional("RELEASE_VERSION_PREFIX");
 const latestPrefix = `${releaseChannel}/latest`;
 const currentCommit = optional("RELEASE_COMMIT");
 const currentRunId = Number(optional("RELEASE_RUN_ID", "0"));
@@ -201,6 +201,35 @@ function validateManifest(target: string, manifest: PlatformManifest): string | 
   return null;
 }
 
+function resolvedPrefixFromManifests(manifests: Record<string, PlatformManifest>): string {
+  if (requestedVersionPrefix.length > 0) return requestedVersionPrefix;
+  if (requestedAssetVersionSuffix !== "auto") {
+    return `${releaseChannel}/versions/${releaseVersion}${requestedAssetVersionSuffix}`;
+  }
+
+  const readyManifests = Object.values(manifests).filter((manifest) => manifest.status === "published");
+  const feedPrefixes = readyManifests
+    .filter((manifest) => typeof manifest.feed?.name === "string" && manifest.feed.name.length > 0)
+    .map((manifest) => manifest.r2?.versionPrefix)
+    .filter((prefix): prefix is string => typeof prefix === "string" && prefix.length > 0);
+  const prefixes = feedPrefixes.length > 0
+    ? [...new Set(feedPrefixes)]
+    : [...new Set(readyManifests
+        .map((manifest) => manifest.r2?.versionPrefix)
+        .filter((prefix): prefix is string => typeof prefix === "string" && prefix.length > 0))];
+
+  if (prefixes.length === 1) return prefixes[0];
+  if (prefixes.length === 0) {
+    throw new Error("RELEASE_ASSET_SUFFIX=auto could not resolve a version prefix from ready platform manifests");
+  }
+  throw new Error(`RELEASE_ASSET_SUFFIX=auto found multiple ready version prefixes: ${prefixes.join(", ")}`);
+}
+
+function suffixFromVersionPrefix(prefix: string): string {
+  const basePrefix = `${releaseChannel}/versions/${releaseVersion}`;
+  return prefix.startsWith(basePrefix) ? prefix.slice(basePrefix.length) : requestedAssetVersionSuffix;
+}
+
 const expectedTargets: string[] = [];
 const readyTargets: string[] = [];
 const failedTargets: string[] = [];
@@ -245,6 +274,8 @@ if (expectedTargets.length > 0 && readyTargets.length === expectedTargets.length
 else if (readyTargets.length > 0) releaseState = "partial";
 
 const latestMetadataUpdated = releaseState === "complete";
+const versionPrefix = resolvedPrefixFromManifests(releaseTargets);
+const assetVersionSuffix = suffixFromVersionPrefix(versionPrefix);
 const metadata = {
   assetVersionSuffix,
   baseVersion: required("BASE_VERSION"),

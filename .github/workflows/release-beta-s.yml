@@ -397,6 +397,10 @@ jobs:
             echo "release-beta-s requires at least one target to be enabled" >&2
             exit 1
           fi
+          if [ "${{ inputs.publish }}" = "true" ] && [ "${{ inputs.enable_win_x64 }}" = "true" ] && [ "${{ inputs.win_x64_target }}" != "nsis" ] && [ "${{ inputs.win_x64_target }}" != "all" ]; then
+            echo "release-beta-s win_x64 publish requires win_x64_target=nsis or all" >&2
+            exit 1
+          fi
 
       - name: Capture previous beta commit
         id: prev
@@ -712,7 +716,8 @@ jobs:
             -ReleaseVersion "${{ needs.metadata.outputs.beta_version }}" `
             -ReleaseAssetSuffix "${{ inputs.win_x64_sign_mode == 'on' && '.signed' || '.unsigned' }}" `
             -ReleaseChannel beta `
-            -ReleasePublicOrigin "${{ inputs.release_public_origin }}"
+            -ReleasePublicOrigin "${{ inputs.release_public_origin }}" `
+            -IncludeZip ${{ inputs.win_x64_target == 'all' && '$true' || '$false' }}
 
       - name: Publish win_x64 platform
         if: ${{ inputs.publish }}
@@ -724,7 +729,7 @@ jobs:
           RELEASE_OUTPUTS_PATH: C:\.tmp\runner\od-beta\win_x64\release-platform-outputs\win_x64.json
           RELEASE_PUBLIC_ORIGIN: ${{ inputs.release_public_origin }}
           RELEASE_REPORT_DIR: C:\.tmp\runner\od-beta\win_x64\release-report\win_x64
-          WIN_INCLUDE_ZIP: ${{ inputs.win_x64_target == 'all' || inputs.win_x64_target == 'zip' }}
+          WIN_INCLUDE_ZIP: ${{ inputs.win_x64_target == 'all' }}
           RELEASE_SIGNED: ${{ inputs.win_x64_sign_mode == 'on' && 'true' || 'false' }}
           RELEASE_STORAGE_ACCESS_KEY_ID: ${{ secrets.NEXU_S3_ACCESS_KEY_ID }}
           RELEASE_STORAGE_BUCKET: ${{ secrets.NEXU_S3_BUCKET }}
