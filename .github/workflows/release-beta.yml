@@ -263,7 +263,6 @@ env:
   POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
   POSTHOG_CLI_PROJECT_ID: ${{ vars.POSTHOG_CLI_PROJECT_ID }}
   RELEASE_BRANCH: ${{ github.ref_name }}
-  RELEASE_COMMIT: ${{ github.sha }}
   RELEASE_REPOSITORY: ${{ github.repository }}
   RELEASE_RUN_ATTEMPT: ${{ github.run_attempt }}
   RELEASE_RUN_ID: ${{ github.run_id }}
@@ -351,6 +350,8 @@ jobs:
     needs: metadata
     if: ${{ inputs.enable_mac_arm64 }}
     runs-on: macos-14
+    env:
+      RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -466,6 +467,8 @@ jobs:
     needs: metadata
     if: ${{ inputs.enable_mac_x64 }}
     runs-on: macos-15-intel
+    env:
+      RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -575,6 +578,8 @@ jobs:
     needs: metadata
     if: ${{ inputs.enable_win_x64 }}
     runs-on: windows-latest
+    env:
+      RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -708,6 +713,8 @@ jobs:
     needs: metadata
     if: ${{ inputs.enable_linux_x64 }}
     runs-on: ubuntu-latest
+    env:
+      RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
@@ -844,6 +851,7 @@ jobs:
       linux_x64_url: ${{ steps.outputs.outputs.linux_x64_appImage_url }}
     env:
       GITHUB_SHA: ${{ needs.metadata.outputs.commit }}
+      RELEASE_COMMIT: ${{ needs.metadata.outputs.commit }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
