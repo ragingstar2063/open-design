@@ -534,7 +534,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', () => {
   const capturePath = process.env.OD_PROMPT_CAPTURE;
-  fs.appendFileSync(`${capturePath}.all`, `--- prompt ---\\n${input}\\n`);
+  fs.appendFileSync(capturePath + '.all', '--- prompt ---\\n' + input + '\\n');
   if (input.includes('# Headless Local Skill') || input.includes('## Active plugin')) {
     fs.writeFileSync(capturePath, input);
   }
