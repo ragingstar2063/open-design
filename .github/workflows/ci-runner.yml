@@ -2,31 +2,43 @@ name: ci-runner
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Shared CI script mode to run
+        required: true
+        type: choice
+        default: setup
+        options:
+          - probe
+          - setup
 
 permissions:
   contents: read
 
 jobs:
   probe:
-    name: Runner CI probe
+    name: Runner CI ${{ inputs.mode }}
     runs-on: [self-hosted, Linux, ARM64, nexu-spark, open-design-ci]
-    timeout-minutes: 5
+    timeout-minutes: 30
     env:
       OD_CI_ALLOW_DOCKER: "1"
+      OD_CI_INSTALL_TIMEOUT_SECONDS: "1500"
       OD_CI_LANE: runner
-      OD_CI_MODE: probe
+      OD_CI_MODE: ${{ inputs.mode }}
+      OD_CI_PNPM_INSTALL_FLAGS: "--frozen-lockfile --prefer-offline"
+      OD_CI_PNPM_STORE_DIR: /home/runner/.cache/open-design-ci/pnpm-store
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2
 
-      - name: Run CI probe
-        run: .github/workflows/scripts/ci.sh probe
+      - name: Run CI script
+        run: .github/workflows/scripts/ci.sh "${{ inputs.mode }}"
 
-      - name: Upload CI probe manifest
+      - name: Upload CI manifest
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ci-runner-probe-${{ github.run_id }}
-          path: .od/ci/probe-manifest.json
+          name: ci-runner-${{ inputs.mode }}-${{ github.run_id }}
+          path: .od/ci/*-manifest.json
           if-no-files-found: warn
           retention-days: 7

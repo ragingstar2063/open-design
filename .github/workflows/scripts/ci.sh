@@ -4,13 +4,13 @@ set -Eeuo pipefail
 mode="${1:-${OD_CI_MODE:-}}"
 
 if [ -z "$mode" ]; then
-  echo "usage: $0 <probe>" >&2
+  echo "usage: $0 <probe|setup>" >&2
   exit 2
 fi
 
 ci_root="${GITHUB_WORKSPACE:-$(pwd)}"
 out_dir="$ci_root/.od/ci"
-manifest="$out_dir/probe-manifest.json"
+manifest="$out_dir/$mode-manifest.json"
 summary="${GITHUB_STEP_SUMMARY:-}"
 
 mkdir -p "$out_dir"
@@ -43,7 +43,7 @@ capture_cmd() {
 
 require_mode() {
   case "$mode" in
-    probe) ;;
+    probe | setup) ;;
     *)
       echo "unknown CI mode: $mode" >&2
       exit 2
@@ -55,6 +55,9 @@ require_mode
 
 lane="${OD_CI_LANE:-unknown}"
 allow_docker="${OD_CI_ALLOW_DOCKER:-0}"
+install_timeout_seconds="${OD_CI_INSTALL_TIMEOUT_SECONDS:-1500}"
+pnpm_install_flags="${OD_CI_PNPM_INSTALL_FLAGS:---frozen-lockfile}"
+pnpm_store_dir="${OD_CI_PNPM_STORE_DIR:-}"
 runner_name="${RUNNER_NAME:-unknown}"
 runner_os="${RUNNER_OS:-unknown}"
 runner_arch="${RUNNER_ARCH:-unknown}"
@@ -68,7 +71,7 @@ echo "runner: $runner_name / $runner_os / $runner_arch"
 echo "ref: $github_ref"
 echo "sha: $github_sha"
 
-append_summary "## CI runner probe"
+append_summary "## CI runner"
 append_summary ""
 append_summary "| Field | Value |"
 append_summary "| --- | --- |"
@@ -108,6 +111,12 @@ append_summary "| corepack | \`$corepack_version\` |"
 append_summary "| pnpm | \`$pnpm_version\` |"
 append_summary "| docker | \`$docker_version\` |"
 
+if [ -n "$pnpm_store_dir" ]; then
+  mkdir -p "$pnpm_store_dir"
+  export npm_config_store_dir="$pnpm_store_dir"
+  pnpm_store="$(pnpm store path --silent)"
+fi
+
 append_summary ""
 append_summary "### Storage"
 append_summary ""
@@ -128,6 +137,47 @@ append_summary "### Docker"
 append_summary ""
 append_summary "Docker smoke: \`$docker_status\`"
 
+install_status="skipped"
+install_seconds="0"
+node_modules_size="not-created"
+pnpm_store_size="unknown"
+
+if [ "$mode" = "setup" ]; then
+  append_summary ""
+  append_summary "### Install"
+  append_summary ""
+  append_summary "Command: \`pnpm install $pnpm_install_flags\`"
+  append_summary ""
+
+  echo "pnpm store: $pnpm_store"
+  echo "pnpm install flags: $pnpm_install_flags"
+  echo "install timeout seconds: $install_timeout_seconds"
+
+  install_start="$(date +%s)"
+  # shellcheck disable=SC2086
+  timeout "${install_timeout_seconds}s" pnpm install $pnpm_install_flags
+  install_seconds="$(( $(date +%s) - install_start ))"
+  install_status="ok"
+
+  if [ -d "$ci_root/node_modules" ]; then
+    node_modules_size="$(du -sh "$ci_root/node_modules" 2>/dev/null | awk '{print $1}')"
+  fi
+fi
+
+if [ -n "$pnpm_store" ] && [ -d "$pnpm_store" ]; then
+  pnpm_store_size="$(du -sh "$pnpm_store" 2>/dev/null | awk '{print $1}')"
+fi
+
+append_summary ""
+append_summary "### Dependency setup"
+append_summary ""
+append_summary "| Field | Value |"
+append_summary "| --- | --- |"
+append_summary "| Install status | \`$install_status\` |"
+append_summary "| Install seconds | \`$install_seconds\` |"
+append_summary "| node_modules size | \`$node_modules_size\` |"
+append_summary "| pnpm store size | \`$pnpm_store_size\` |"
+
 cat > "$manifest" <<JSON
 {
   "mode": "$(json_escape "$mode")",
@@ -145,6 +195,11 @@ cat > "$manifest" <<JSON
   "corepackVersion": "$(json_escape "$corepack_version")",
   "pnpmVersion": "$(json_escape "$pnpm_version")",
   "pnpmStore": "$(json_escape "$pnpm_store")",
+  "pnpmStoreSize": "$(json_escape "$pnpm_store_size")",
+  "pnpmInstallFlags": "$(json_escape "$pnpm_install_flags")",
+  "installStatus": "$(json_escape "$install_status")",
+  "installSeconds": "$(json_escape "$install_seconds")",
+  "nodeModulesSize": "$(json_escape "$node_modules_size")",
   "dockerVersion": "$(json_escape "$docker_version")",
   "dockerStatus": "$(json_escape "$docker_status")",
   "rootDisk": "$(json_escape "$disk_root")",
