@@ -533,7 +533,11 @@ let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', () => {
-  fs.writeFileSync(process.env.OD_PROMPT_CAPTURE, input);
+  const capturePath = process.env.OD_PROMPT_CAPTURE;
+  fs.appendFileSync(capturePath + '.all', '--- prompt ---\\n' + input + '\\n');
+  if (input.includes('# Headless Local Skill') || input.includes('## Active plugin')) {
+    fs.writeFileSync(capturePath, input);
+  }
   console.log(JSON.stringify({ type: 'text', part: { text: 'headless-ok' } }));
 });
 `,
