@@ -185,7 +185,7 @@ The minimum manifest shape should be stable across traces:
       "truncated": false,
       "stored_in_open_design": true,
       "langfuse_media_id": null,
-      "storage_ref": "od://objects/workspaces/ws_1/runs/run_1/attachments/att_123"
+      "storage_ref": "od://objects/workspaces/ws_1/projects/proj_1/runs/run_1/attachment/att_123"
     }
   ],
   "artifact_manifest": [
@@ -201,8 +201,8 @@ The minimum manifest shape should be stable across traces:
       "summary": "Generated HTML prototype for the requested dashboard flow.",
       "redacted": false,
       "truncated": false,
-      "storage_ref": "od://objects/workspaces/ws_1/runs/run_1/artifacts/art_456",
-      "thumbnail_ref": "od://objects/workspaces/ws_1/runs/run_1/artifacts/art_456/thumb.png"
+      "storage_ref": "od://objects/workspaces/ws_1/projects/proj_1/runs/run_1/artifact/art_456",
+      "thumbnail_ref": "od://objects/workspaces/ws_1/projects/proj_1/runs/run_1/preview/prev_thumb_789"
     }
   ]
 }
@@ -300,10 +300,10 @@ scoring schema.
 | Score | Applies to |
 | --- | --- |
 | `task_success` | All score-eligible production and accepted-dataset experiment/evaluation runs with a terminal result. |
-| `artifact_valid` | Artifact-producing production or evaluation tasks that create, edit, export, or inspect project files with a required manifest or file contract. |
-| `preview_ok` | Artifact-producing production or evaluation tasks whose primary output has a supported preview renderer. |
+| `artifact_valid` | Artifact-producing score-eligible production and accepted-dataset experiment/evaluation tasks that create, edit, export, or inspect project files with a required manifest or file contract. |
+| `preview_ok` | Artifact-producing score-eligible production and accepted-dataset experiment/evaluation tasks whose primary output has a supported preview renderer. |
 | `user_request_covered` | Production and accepted-dataset experiment/evaluation tasks with a natural-language request or expected outcome and terminal output to compare. |
-| `design_quality` | Production and evaluation outputs for visual, product, deck, prototype, image, video, audio, or document tasks with an applicable rubric. |
+| `design_quality` | Score-eligible production and accepted-dataset experiment/evaluation outputs for visual, product, deck, prototype, image, video, audio, or document tasks with an applicable rubric. |
 | `stability_risk` | All eligible runs. |
 | `cost_bucket` | All score-eligible runs with model and token metadata. |
 | `latency_bucket` | All score-eligible runs with timing metadata. |
