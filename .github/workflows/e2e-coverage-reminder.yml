@@ -2,8 +2,8 @@ name: E2E coverage reminder
 
 on:
   schedule:
-    # 10:30 UTC = 18:30 Asia/Shanghai
-    - cron: "30 10 * * *"
+    # 10:00 UTC = 18:00 Asia/Shanghai
+    - cron: "0 10 * * *"
   workflow_dispatch:
     inputs:
       lookback_hours:
