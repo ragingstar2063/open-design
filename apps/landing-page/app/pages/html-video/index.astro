@@ -23,7 +23,6 @@ import LazyImg from '../../_components/lazy-img.astro';
 import { imageAsset, imageAssetSrcset } from '../../image-assets';
 import {
   DEFAULT_LOCALE,
-  getCommonCopy,
   getHeaderProductMenuCopy,
   getLandingUiCopy,
   localeFromPath,
@@ -598,7 +597,7 @@ const showcaseTiles = copy.showcase.map((tile, i) => ({
     </ul>
   </section>
 
-  <section class="ha-section ha-duo" aria-label="Soundtrack and Quickstart">
+  <section class="ha-section ha-duo" aria-label={`${copy.soundtrackTitle} · ${copy.quickstartTitle}`}>
     <div class="ha-note">
       <h2 id="hv-soundtrack" class="ha-note-h">{copy.soundtrackTitle}</h2>
       <p>{copy.soundtrackLead}</p>
