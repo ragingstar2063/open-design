@@ -146,6 +146,10 @@ jobs:
 
           if [ "$POLICY" = "both-success" ]; then
             echo "OD_CI_GATE_RESULT policy=$POLICY provided=$provided_count success=$success_count"
+            if [ -z "$RUNNER_RUN_ID" ] || [ -z "$HOSTED_RUN_ID" ]; then
+              echo "CI gate rejected: policy=both-success requires both runner_run_id and hosted_run_id." >&2
+              exit 2
+            fi
             if [ "$success_count" -eq "$provided_count" ]; then
               echo "CI gate accepted: all provided paths succeeded."
               exit 0
