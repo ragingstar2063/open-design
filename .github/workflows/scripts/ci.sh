@@ -4,7 +4,7 @@ set -Eeuo pipefail
 mode="${1:-${OD_CI_MODE:-}}"
 
 if [ -z "$mode" ]; then
-  echo "usage: $0 <probe|setup|policy|unit|typecheck|daemon|web>" >&2
+  echo "usage: $0 <probe|setup|policy|unit|typecheck|daemon|web|build>" >&2
   exit 2
 fi
 
@@ -43,7 +43,7 @@ capture_cmd() {
 
 require_mode() {
   case "$mode" in
-    probe | setup | policy | unit | typecheck | daemon | web) ;;
+    probe | setup | policy | unit | typecheck | daemon | web | build) ;;
     *)
       echo "unknown CI mode: $mode" >&2
       exit 2
@@ -198,8 +198,13 @@ web_exit_code="0"
 web_seconds="0"
 web_test_exit_code="0"
 web_test_seconds="0"
+build_status="skipped"
+build_exit_code="0"
+build_seconds="0"
+workspace_build_exit_code="0"
+workspace_build_seconds="0"
 
-if [ "$mode" = "setup" ] || [ "$mode" = "policy" ] || [ "$mode" = "unit" ] || [ "$mode" = "typecheck" ] || [ "$mode" = "daemon" ] || [ "$mode" = "web" ]; then
+if [ "$mode" = "setup" ] || [ "$mode" = "policy" ] || [ "$mode" = "unit" ] || [ "$mode" = "typecheck" ] || [ "$mode" = "daemon" ] || [ "$mode" = "web" ] || [ "$mode" = "build" ]; then
   append_summary ""
   append_summary "### Install"
   append_summary ""
@@ -468,6 +473,51 @@ if [ "$mode" = "web" ] && [ "$install_exit_code" = "0" ]; then
   web_seconds="$(( $(date +%s) - web_start ))"
 fi
 
+record_build_result() {
+  local label="$1"
+  local exit_code="$2"
+  local seconds="$3"
+
+  append_summary "| \`$label\` | \`$exit_code\` | \`$seconds\` |"
+  if [ "$exit_code" != "0" ] && [ "$build_status" = "ok" ]; then
+    build_status="failed"
+    build_exit_code="$exit_code"
+  fi
+}
+
+if [ "$mode" = "build" ] && [ "$install_exit_code" = "0" ]; then
+  append_summary ""
+  append_summary "### Build workspaces"
+  append_summary ""
+  append_summary "| Check | Exit code | Seconds |"
+  append_summary "| --- | ---: | ---: |"
+
+  build_status="ok"
+  build_start="$(date +%s)"
+
+  run_ci_command "@open-design/daemon build" pnpm --filter @open-design/daemon build
+  daemon_build_exit_code="$last_command_exit_code"
+  daemon_build_seconds="$last_command_seconds"
+  record_build_result "@open-design/daemon build" "$daemon_build_exit_code" "$daemon_build_seconds"
+
+  run_ci_command "@open-design/desktop build" pnpm --filter @open-design/desktop build
+  desktop_build_exit_code="$last_command_exit_code"
+  desktop_build_seconds="$last_command_seconds"
+  record_build_result "@open-design/desktop build" "$desktop_build_exit_code" "$desktop_build_seconds"
+
+  run_ci_command "@open-design/web build:sidecar" pnpm --filter @open-design/web build:sidecar
+  web_sidecar_build_exit_code="$last_command_exit_code"
+  web_sidecar_build_seconds="$last_command_seconds"
+  record_build_result "@open-design/web build:sidecar" "$web_sidecar_build_exit_code" "$web_sidecar_build_seconds"
+
+  run_ci_command "workspace build" pnpm -r --filter '!@open-design/landing-page' --workspace-concurrency=1 --if-present run build
+  workspace_build_exit_code="$last_command_exit_code"
+  workspace_build_seconds="$last_command_seconds"
+  record_build_result "workspace build" "$workspace_build_exit_code" "$workspace_build_seconds"
+
+  build_seconds="$(( $(date +%s) - build_start ))"
+fi
+
 if [ -n "$pnpm_store" ] && [ -d "$pnpm_store" ]; then
   pnpm_store_size="$(du -sh "$pnpm_store" 2>/dev/null | awk '{print $1}')"
 fi
@@ -492,6 +542,8 @@ append_summary "| Daemon status | \`$daemon_status\` |"
 append_summary "| Daemon seconds | \`$daemon_seconds\` |"
 append_summary "| Web status | \`$web_status\` |"
 append_summary "| Web seconds | \`$web_seconds\` |"
+append_summary "| Build status | \`$build_status\` |"
+append_summary "| Build seconds | \`$build_seconds\` |"
 
 cat > "$manifest" <<JSON
 {
@@ -568,6 +620,11 @@ cat > "$manifest" <<JSON
   "webSeconds": "$(json_escape "$web_seconds")",
   "webTestExitCode": "$(json_escape "$web_test_exit_code")",
   "webTestSeconds": "$(json_escape "$web_test_seconds")",
+  "buildStatus": "$(json_escape "$build_status")",
+  "buildExitCode": "$(json_escape "$build_exit_code")",
+  "buildSeconds": "$(json_escape "$build_seconds")",
+  "workspaceBuildExitCode": "$(json_escape "$workspace_build_exit_code")",
+  "workspaceBuildSeconds": "$(json_escape "$workspace_build_seconds")",
   "dockerVersion": "$(json_escape "$docker_version")",
   "dockerStatus": "$(json_escape "$docker_status")",
   "rootDisk": "$(json_escape "$disk_root")",
@@ -599,4 +656,8 @@ fi
 
 if [ "$web_exit_code" != "0" ]; then
   exit "$web_exit_code"
+fi
+
+if [ "$build_exit_code" != "0" ]; then
+  exit "$build_exit_code"
 fi

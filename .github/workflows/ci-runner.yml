@@ -16,6 +16,7 @@ on:
           - typecheck
           - daemon
           - web
+          - build
 
 permissions:
   contents: read
