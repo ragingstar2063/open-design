@@ -86,7 +86,6 @@
       "--fg",
       "--fg-2",
       "--focus-ring",
-      "--font-",
       "--font-body",
       "--font-display",
       "--font-mono",
@@ -133,9 +132,7 @@
       "--surface-warm",
       "--text-2xl"
     ],
-    "undeclaredReferenced": [
-      "--font-"
-    ]
+    "undeclaredReferenced": []
   },
   "selectors": [
     ".badge",
