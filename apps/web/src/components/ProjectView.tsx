@@ -5233,6 +5233,14 @@ export function ProjectView({
       agents={agents}
       daemonLive={daemonLive}
       onModeChange={onModeChange}
+      onOpen={() => {
+        trackComposerBarClick(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          element: 'agent_selector_open',
+          ...(project?.id ? { project_id: project.id } : {}),
+        });
+      }}
       onAgentChange={(id) => {
         trackComposerBarClick(analytics.track, {
           page_name: 'chat_panel',
