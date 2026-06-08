@@ -562,6 +562,90 @@ describe('langfuse-bridge.reportRunCompletedFromDaemon', () => {
     );
   });
 
+  it('uploads nested produced files from imported project roots without leaking raw paths to Langfuse', async () => {
+    await writeAppCfg({
+      installationId: 'install-uuid-1',
+      telemetry: { metrics: true, content: true, artifactManifest: true },
+    });
+    const importedRoot = path.join(dataDir, 'imported-project');
+    const managedRoot = path.join(dataDir, 'projects', 'proj-1');
+    await mkdir(path.join(importedRoot, 'dist'), { recursive: true });
+    await mkdir(managedRoot, { recursive: true });
+    await writeFile(path.join(importedRoot, 'dist', 'index.html'), '<!doctype html><h1>imported</h1>');
+    await writeFile(path.join(managedRoot, 'index.html'), '<!doctype html><h1>managed</h1>');
+
+    const fetchSpy = vi.fn(async (url: string, init: RequestInit) => {
+      if (url.includes('/api/objects/batch')) {
+        const parsed = JSON.parse(init.body as string) as {
+          objects: Array<{ storage_ref: string; filename: string; content_base64: string }>;
+        };
+        expect(parsed.objects).toHaveLength(1);
+        expect(parsed.objects[0]!.filename).toBe('dist/index.html');
+        expect(Buffer.from(parsed.objects[0]!.content_base64, 'base64').toString('utf8'))
+          .toBe('<!doctype html><h1>imported</h1>');
+        return new Response(
+          JSON.stringify({
+            objects: parsed.objects.map((object) => ({
+              storage_ref: object.storage_ref,
+              status: 'available',
+              size_bytes: Buffer.from(object.content_base64, 'base64').byteLength,
+            })),
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response('{}', { status: 207 });
+    });
+
+    process.env.OPEN_DESIGN_OBJECT_RELAY_URL = 'https://telemetry.open-design.ai/api/objects/batch';
+    process.env.LANGFUSE_PUBLIC_KEY = 'pk';
+    process.env.LANGFUSE_SECRET_KEY = 'sk';
+    try {
+      await reportRunCompletedFromDaemon({
+        db: makeDbWithListMessages({
+          'conv-1': [
+            { id: 'user-1', role: 'user', content: 'Create a nested artifact.' },
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Done.',
+              producedFiles: [
+                { name: 'index.html', path: 'dist/index.html', kind: 'html', size: 31 },
+              ],
+            },
+          ],
+        }),
+        dataDir,
+        run: makeRun({
+          projectMetadata: { baseDir: importedRoot },
+        }) as any,
+        fetchImpl: fetchSpy as any,
+      });
+    } finally {
+      delete process.env.OPEN_DESIGN_OBJECT_RELAY_URL;
+      delete process.env.LANGFUSE_PUBLIC_KEY;
+      delete process.env.LANGFUSE_SECRET_KEY;
+    }
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    const langfuseInit = fetchSpy.mock.calls[1]![1] as RequestInit;
+    const langfuseBody = langfuseInit.body as string;
+    expect(langfuseBody).not.toContain(importedRoot);
+    expect(langfuseBody).not.toContain('dist/index.html');
+    expect(langfuseBody).not.toContain('<!doctype html><h1>imported</h1>');
+    const batch = JSON.parse(langfuseBody).batch as any[];
+    const trace = batch[0].body;
+    expect(trace.metadata.artifacts).toEqual([
+      { slug: 'index.html', type: 'html', sizeBytes: 31 },
+    ]);
+    expect(trace.metadata.artifact_manifest[0]).toMatchObject({
+      object_class: 'artifact',
+      status: 'ok',
+      stored_in_open_design: true,
+      extension: 'html',
+    });
+  });
+
   it('carries prior user attachments into follow-up generation traces', async () => {
     await writeAppCfg({
       installationId: 'install-uuid-1',

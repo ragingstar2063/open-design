@@ -16,6 +16,7 @@ const OBJECT_RELAY_MARKER_VALUE = 'object-ingestion-v1';
 const DEFAULT_RETENTION_DAYS = 90;
 const DEFAULT_OBJECT_MAX_BYTES = 50 * 1024 * 1024;
 const DEFAULT_OBJECT_BATCH_MAX_BYTES = 100 * 1024 * 1024;
+const OBJECT_BATCH_MAX_COUNT = 100;
 
 type ObjectClass = 'attachment' | 'artifact' | 'input_text_snapshot';
 type TraceObjectManifestEntry =
@@ -48,8 +49,9 @@ export interface BuildTraceObjectManifestsOptions {
   projectId: string;
   runId: string;
   projectsRoot: string;
+  projectMetadata?: Record<string, unknown> | null;
   attachmentPaths?: string[];
-  artifacts?: ArtifactSummary[];
+  artifacts?: TraceArtifactObjectSource[];
   prompt: string;
   prefs: {
     metrics?: boolean;
@@ -59,6 +61,11 @@ export interface BuildTraceObjectManifestsOptions {
   fetchImpl?: typeof fetch;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+}
+
+export interface TraceArtifactObjectSource {
+  summary: ArtifactSummary;
+  sourcePath?: string;
 }
 
 interface ObjectRelayConfig {
@@ -257,7 +264,8 @@ function splitObjectBatches(
     const next = [...current, object];
     if (
       current.length > 0 &&
-      byteLength(buildObjectBatchBody(opts, next)) > config.objectBatchMaxBytes
+      (next.length > OBJECT_BATCH_MAX_COUNT ||
+        byteLength(buildObjectBatchBody(opts, next)) > config.objectBatchMaxBytes)
     ) {
       batches.push(current);
       current = [object];
@@ -363,8 +371,9 @@ async function collectSources(
     }
   }
 
-  for (const artifact of opts.artifacts ?? []) {
-    const artifactPath = artifact.slug;
+  for (const artifactSource of opts.artifacts ?? []) {
+    const artifact = artifactSource.summary;
+    const artifactPath = artifactSource.sourcePath ?? artifact.slug;
     const id = objectId('art', artifactPath);
     if (!projectId) {
       sources.push({
@@ -380,7 +389,12 @@ async function collectSources(
       continue;
     }
     try {
-      const file = await readProjectFile(opts.projectsRoot, projectId, artifactPath);
+      const file = await readProjectFile(
+        opts.projectsRoot,
+        projectId,
+        artifactPath,
+        opts.projectMetadata ?? undefined,
+      );
       sources.push({
         objectClass: 'artifact',
         id,
