@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ComponentProps } from 'react';
+import { createRef, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const trackChatPanelClickMock = vi.hoisted(() => vi.fn());
@@ -14,9 +14,10 @@ vi.mock('../../src/analytics/events', async (importOriginal) => {
   };
 });
 
-import { ChatComposer } from '../../src/components/ChatComposer';
+import { ChatComposer, type ChatComposerHandle } from '../../src/components/ChatComposer';
 import { I18nProvider } from '../../src/i18n';
 import type { Locale } from '../../src/i18n/types';
+import type { AppliedPluginSnapshot } from '@open-design/contracts';
 import { composerText, pressEnter, typeAndSettle } from '../helpers/lexical-composer';
 
 const COMMUNITY_PLUGIN = {
@@ -519,6 +520,38 @@ describe('ChatComposer context pickers', () => {
 
     await waitFor(() => expect(screen.queryByTestId('plugin-inputs-form')).toBeNull());
     expect(screen.queryByTestId('context-chip-strip')).toBeNull();
+  });
+
+  it('clears restored inline plugin context when the queued draft token is removed', async () => {
+    const onSend = vi.fn();
+    const composerRef = createRef<ChatComposerHandle>();
+    const restoredAppliedPlugin = APPLY_RESULT.appliedPlugin as AppliedPluginSnapshot;
+    render(<ChatComposer ref={composerRef} {...composerElement({ onSend }).props} />);
+    await flushMounts();
+
+    act(() => {
+      composerRef.current?.restoreDraft({
+        text: '@My Export queued work',
+        meta: {
+          appliedPluginSnapshot: restoredAppliedPlugin,
+          appliedPluginSnapshotId: restoredAppliedPlugin.snapshotId,
+          inlineAppliedPlugin: {
+            pluginId: USER_PLUGIN.id,
+            label: USER_PLUGIN.title,
+          },
+          context: { pluginIds: [USER_PLUGIN.id] },
+        },
+      });
+    });
+
+    await waitFor(() => expect(composerText()).toBe('@My Export queued work'));
+
+    await typeAndSettle('queued work');
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+    expect(onSend.mock.calls[0]?.[3]?.context?.pluginIds).toBeUndefined();
+    expect(onSend.mock.calls[0]?.[3]?.appliedPluginSnapshot).toBeUndefined();
   });
 
   it('keeps the plugin context form when the inline plugin token has trailing punctuation', async () => {

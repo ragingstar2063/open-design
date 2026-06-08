@@ -328,6 +328,10 @@ export interface ChatSendMeta {
   context?: RunContextSelection;
   appliedPluginSnapshot?: AppliedPluginSnapshot;
   appliedPluginSnapshotId?: string;
+  inlineAppliedPlugin?: {
+    pluginId: string;
+    label: string;
+  };
   // Per-turn skill ids picked via the @-mention popover. The chat layer
   // forwards these to the daemon's `skillIds` field so the system prompt
   // for this run only is composed with the extra skill bodies, without
@@ -634,6 +638,24 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       () => mcpServers.filter((s) => s.enabled),
       [mcpServers],
     );
+
+    function inlineBackedPluginFromRestoredDraft(
+      text: string,
+      appliedPlugin: AppliedPluginSnapshot | null | undefined,
+      meta: ChatSendMeta | undefined,
+    ): { id: string; label: string } | null {
+      if (!appliedPlugin) return null;
+      const restoredInline = meta?.inlineAppliedPlugin;
+      const restoredRecord = pluginsForComposer.find((plugin) => plugin.id === appliedPlugin.pluginId);
+      const labels = [
+        restoredInline?.pluginId === appliedPlugin.pluginId ? restoredInline.label : null,
+        restoredRecord?.title,
+        appliedPlugin.pluginId,
+      ].filter((label): label is string => Boolean(label));
+      const label = labels.find((candidate) => mentionTokenPresent(text, candidate));
+      return label ? { id: appliedPlugin.pluginId, label } : null;
+    }
+
     const designToolboxResourceIndex = useMemo<DesignToolboxResourceIndex>(
       () => ({
         skills,
@@ -872,7 +894,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               : [],
           );
           setStagedWorkspaceContexts(ctx?.workspaceItems ?? []);
-          setActiveAppliedPlugin(meta?.appliedPluginSnapshot ?? null);
+          const restoredAppliedPlugin = meta?.appliedPluginSnapshot ?? null;
+          setActiveAppliedPlugin(restoredAppliedPlugin);
+          inlineBackedPluginRef.current = inlineBackedPluginFromRestoredDraft(
+            text,
+            restoredAppliedPlugin,
+            meta,
+          );
           setUploadError(null);
           setMention(null);
           setSlash(null);
@@ -884,7 +912,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           editorRef.current?.focus();
         },
       }),
-      [connectors, mcpServers, skills]
+      [connectors, mcpServers, pluginsForComposer, skills]
     );
 
     function reset() {
@@ -934,6 +962,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           ? {
               appliedPluginSnapshot: activeAppliedPlugin,
               appliedPluginSnapshotId: activeAppliedPlugin.snapshotId,
+              ...(inlineBackedPluginRef.current?.id === activeAppliedPlugin.pluginId
+                ? {
+                    inlineAppliedPlugin: {
+                      pluginId: activeAppliedPlugin.pluginId,
+                      label: inlineBackedPluginRef.current.label,
+                    },
+                  }
+                : {}),
             }
           : {}),
         ...(Object.keys(context).length > 0 ? { context } : {}),
