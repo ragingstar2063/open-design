@@ -14,6 +14,7 @@ import { AnimatePresence } from 'motion/react';
 import { createHtmlArtifactManifest, inferLegacyManifest } from '../artifacts/manifest';
 import { resolveHtmlPointerArtifactTarget } from '../artifacts/pointer';
 import { validateHtmlArtifact } from '../artifacts/validate';
+import { recoverHtmlArtifactFromPrecedingDocument } from '../artifacts/recover';
 import { createArtifactParser } from '../artifacts/parser';
 import {
   findFirstQuestionForm,
@@ -1637,7 +1638,13 @@ export function ProjectView({
   }, []);
 
   const persistArtifact = useCallback(
-    async (art: Artifact, projectFilesSnapshot?: ProjectFile[]) => {
+    async (art: Artifact, projectFilesSnapshot?: ProjectFile[], sourceText?: string) => {
+      const recoveredHtml = recoverHtmlArtifactFromPrecedingDocument({
+        artifactHtml: art.html,
+        identifier: art.identifier,
+        sourceText,
+      });
+      const artifactToPersist = recoveredHtml ? { ...art, html: recoveredHtml } : art;
       const baseName = artifactBaseNameFor(art);
       const ext = artifactExtensionFor(art);
       // Pick a name that doesn't collide with an existing project file.
@@ -1653,7 +1660,7 @@ export function ProjectView({
       }
       if (ext === '.html') {
         const pointerTarget = resolveHtmlPointerArtifactTarget({
-          content: art.html,
+          content: artifactToPersist.html,
           candidateFileName: fileName,
           projectFiles: currentProjectFiles,
         });
@@ -1670,7 +1677,7 @@ export function ProjectView({
       // when only Edit-tool changes happened this turn. Without this guard,
       // such content lands as a phantom HTML file in the project panel.
       if (ext === '.html') {
-        const validation = validateHtmlArtifact(art.html);
+        const validation = validateHtmlArtifact(artifactToPersist.html);
         if (!validation.ok) {
           setError(`Refused to save artifact "${art.identifier || art.title || 'untitled'}": ${validation.reason}`);
           return;
@@ -1702,7 +1709,7 @@ export function ProjectView({
                 designSystemId: project.designSystemId,
               },
             });
-      const file = await writeProjectTextFile(project.id, fileName, art.html, {
+      const file = await writeProjectTextFile(project.id, fileName, artifactToPersist.html, {
         artifactManifest: manifest ?? undefined,
       });
       if (file) {
@@ -2625,7 +2632,7 @@ export function ProjectView({
                     savedArtifactRef.current = recoveredExistingArtifact.name;
                     requestOpenFile(recoveredExistingArtifact.name);
                   } else {
-                    await persistArtifact(parsedArtifact, nextFiles);
+                    await persistArtifact(parsedArtifact, nextFiles, replayedContent);
                     nextFiles = await refreshProjectFiles();
                   }
                 }
@@ -3319,7 +3326,7 @@ export function ProjectView({
           void (async () => {
             let nextFiles = await refreshProjectFiles();
             if (parsedArtifact?.html) {
-              await persistArtifact(parsedArtifact, nextFiles);
+              await persistArtifact(parsedArtifact, nextFiles, streamedText || fullText);
               nextFiles = await refreshProjectFiles();
             }
             const produced = computeProducedFiles(beforeFileNames, nextFiles) ?? [];
