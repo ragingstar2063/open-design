@@ -70,6 +70,25 @@ describe('resolveModelForAgent', () => {
     ]);
   });
 
+  it('isolates remembered AMR live models by environment profile scope', () => {
+    const def = defWithId('amr', []);
+    rememberLiveModels(def.id, [
+      { id: 'prod-model', label: 'prod-model' },
+    ], 'prod');
+    rememberLiveModels(def.id, [
+      { id: 'test-model', label: 'test-model' },
+    ], 'test');
+
+    expect(getRememberedLiveModels(def.id, 'prod')).toEqual([
+      { id: 'prod-model', label: 'prod-model' },
+    ]);
+    expect(getRememberedLiveModels(def.id, 'test')).toEqual([
+      { id: 'test-model', label: 'test-model' },
+    ]);
+    expect(resolveModelForAgent(def, null, {}, 'prod')).toBe('prod-model');
+    expect(resolveModelForAgent(def, null, {}, 'test')).toBe('test-model');
+  });
+
   it('prefers remembered live models only when the fresh AMR catalog is empty', () => {
     const remembered = [
       { id: 'deepseek-v3.2', label: 'deepseek-v3.2' },

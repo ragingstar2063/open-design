@@ -1,7 +1,7 @@
 ---
 id: 20260608-hidden-packaged-amr-profile-menu
 name: Hidden Packaged Amr Profile Menu
-status: planned
+status: implemented
 created: '2026-06-08'
 ---
 
@@ -422,15 +422,50 @@ Depends on: Step 1, Step 2, Step 3
 
 ### Progress
 
-- [ ] Step 1: Hidden Desktop Menu
-- [ ] Step 2: Profile Config Writes
-- [ ] Step 3: AMR Model Cache Isolation
-- [ ] Step 4: Validation Pass
+- [x] Step 1: Hidden Desktop Menu
+- [x] Step 2: Profile Config Writes
+- [x] Step 3: AMR Model Cache Isolation
+- [x] Step 4: Validation Pass
 
 ### Implementation
 
-<!-- Files created/modified, decisions made during coding, deviations from design -->
+- `apps/desktop/src/main/index.ts`
+  - Added a process-local hidden `Develop` menu toggled by
+    `Command+Option+Shift+D` on macOS and `Control+Alt+Shift+D` elsewhere.
+  - Added `Develop -> AMR Environment Profile -> prod/test/local` radio menu
+    items.
+  - Reads current profile from `/api/app-config` before showing the menu.
+  - Writes selected profile by merging
+    `agentCliEnv.amr.OPEN_DESIGN_AMR_PROFILE`, preserving other app config and
+    AMR env overrides.
+  - Surfaces daemon URL, read, write, invalid response, and shortcut
+    registration failures through native error dialogs.
+- `apps/desktop/tests/main/amr-environment-profile-menu.test.ts`
+  - Added focused helper coverage for profile normalization, config merge
+    preservation, missing env creation, and menu radio structure.
+- `apps/daemon/src/runtimes/models.ts`
+  - Added optional remembered live-model cache scope while preserving existing
+    agent-only behavior when no scope is supplied.
+- `apps/daemon/src/server.ts`
+  - Scoped AMR remembered live-model reads/writes by resolved AMR Environment
+    Profile during AMR run preflight.
+- `apps/daemon/tests/runtimes/resolve-model.test.ts`
+  - Added AMR profile-scoped remembered model isolation coverage.
 
 ### Verification
 
-<!-- How the feature was verified: tests written, manual testing steps, results -->
+- `pnpm exec vitest run -c vitest.config.ts tests/runtimes/resolve-model.test.ts`
+  from `apps/daemon`: passed.
+- `pnpm exec vitest run -c vitest.config.ts tests/main/amr-environment-profile-menu.test.ts`
+  from `apps/desktop`: passed.
+- `pnpm --filter @open-design/daemon typecheck`: passed.
+- `pnpm --filter @open-design/desktop typecheck`: passed.
+- `pnpm typecheck`: passed.
+- `pnpm guard`: failed on the pre-existing `tools/pr/` top-level tools
+  allowlist violation. The initial sandbox run also failed before checks with
+  `listen EPERM` from `tsx`; the elevated rerun reached repository checks and
+  failed only on `tools/pr/`.
+- An accidental broad `pnpm --filter @open-design/daemon test --
+  tests/runtimes/resolve-model.test.ts` run invoked the wider daemon suite and
+  reported unrelated existing failures/timeouts; focused daemon coverage above
+  passed with the direct Vitest command.
