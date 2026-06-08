@@ -207,13 +207,16 @@ export function mergeAmrEnvironmentProfileConfig(
   if (!AMR_ENVIRONMENT_PROFILES.includes(profile)) {
     throw new Error(`Unsupported AMR Environment Profile: ${String(profile)}`);
   }
+  const hadAmrModel = Object.prototype.hasOwnProperty.call(config.agentModels ?? {}, AMR_PROFILE_AGENT_ID);
   const nextAgentModels = { ...(config.agentModels ?? {}) };
   delete nextAgentModels[AMR_PROFILE_AGENT_ID];
   return {
     ...config,
     ...(Object.keys(nextAgentModels).length > 0
       ? { agentModels: nextAgentModels }
-      : { agentModels: undefined }),
+      : hadAmrModel
+        ? { agentModels: {} }
+        : {}),
     agentCliEnv: {
       ...(config.agentCliEnv ?? {}),
       [AMR_PROFILE_AGENT_ID]: {

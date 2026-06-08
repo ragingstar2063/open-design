@@ -75,25 +75,34 @@ describe("AMR Environment Profile desktop menu helpers", () => {
     });
   });
 
-  it("drops agentModels when AMR was the only persisted model choice", () => {
-    expect(
-      mergeAmrEnvironmentProfileConfig(
-        {
-          agentModels: {
-            amr: {
-              model: "deepseek-v4-flash",
-            },
+  it("serializes an explicit empty agentModels map when AMR was the only persisted model choice", () => {
+    const result = mergeAmrEnvironmentProfileConfig(
+      {
+        agentModels: {
+          amr: {
+            model: "deepseek-v4-flash",
           },
         },
-        "test",
-      ),
-    ).toEqual({
+      },
+      "test",
+    );
+
+    expect(result).toEqual({
       agentCliEnv: {
         amr: {
           OPEN_DESIGN_AMR_PROFILE: "test",
         },
       },
-      agentModels: undefined,
+      agentModels: {},
+    });
+
+    expect(JSON.parse(JSON.stringify(result))).toEqual({
+      agentCliEnv: {
+        amr: {
+          OPEN_DESIGN_AMR_PROFILE: "test",
+        },
+      },
+      agentModels: {},
     });
   });
 
