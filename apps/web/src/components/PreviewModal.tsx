@@ -204,6 +204,10 @@ interface Props {
   onFullscreenClick?: () => void;
   onShareClick?: () => void;
   onSidebarToggleClick?: (open: boolean) => void;
+  // Hide the header sidebar-toggle button (the plugin detail opens its
+  // collapsed info panel via the preview-edge handle instead). Other
+  // variants — design-system "DESIGN.md", media, scenario — keep it.
+  hideSidebarToggle?: boolean;
   // Fires when the user picks a share-menu item ("pdf" / "zip" / "html"
   // / "image" / "open_in_new_tab"). Used by callers that want to track popover-
   // level clicks separately from the share trigger.
@@ -229,6 +233,7 @@ export function PreviewModal({
   primaryAction,
   headerExtras,
   shareTarget,
+  hideSidebarToggle = false,
   onFullscreenClick,
   onShareClick,
   onSidebarToggleClick,
@@ -546,6 +551,22 @@ export function PreviewModal({
                   {primaryAction.busy
                     ? primaryAction.busyLabel ?? primaryAction.label
                     : primaryAction.label}
+                </button>
+              ) : null}
+              {sidebar && !hideSidebarToggle ? (
+                <button
+                  className={`ghost ${sidebarOpen ? 'is-active' : ''}`}
+                  onClick={() => {
+                    setSidebarOpen((v) => {
+                      const next = !v;
+                      onSidebarToggleClick?.(next);
+                      return next;
+                    });
+                  }}
+                  aria-pressed={sidebarOpen}
+                  title={sidebar.label}
+                >
+                  {sidebar.label}
                 </button>
               ) : null}
               {showTemplateShareMenu ? (

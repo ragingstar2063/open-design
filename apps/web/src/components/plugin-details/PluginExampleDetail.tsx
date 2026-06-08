@@ -146,6 +146,7 @@ export function PluginExampleDetail({
         busyLabel: 'Applying…',
         testId: `plugin-details-use-${record.id}`,
       }}
+      hideSidebarToggle
     />
   );
 }
