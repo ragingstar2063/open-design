@@ -10600,7 +10600,13 @@ export async function startServer({
         if (snap?.pluginId) {
           const plugin = getInstalledPlugin(db, snap.pluginId);
           if (plugin) {
-            const { loadPluginLocalSkill } = await import('./plugins/local-skill.js');
+            const [{ getPluginContextCraft }, { loadPluginLocalSkill }] = await Promise.all([
+              import('./plugins/context-craft.js'),
+              import('./plugins/local-skill.js'),
+            ]);
+            for (const craft of getPluginContextCraft(plugin)) {
+              if (!skillCraftRequires.includes(craft)) skillCraftRequires.push(craft);
+            }
             const local = await loadPluginLocalSkill(plugin);
             if (local) {
               skillBody = local.body + composedSkillBlocks;
