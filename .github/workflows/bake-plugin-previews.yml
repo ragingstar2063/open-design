@@ -83,17 +83,35 @@ jobs:
             --endpoint-url "${{ secrets.R2_ENDPOINT }}" \
             --exclude manifest.json
 
-      - name: Commit refreshed manifest
+      - name: Open manifest PR for review
+        # The clips are already on R2; the manifest is version-pinned (it ships
+        # with the build), so it must land on main through a reviewed PR rather
+        # than a direct push to protected main. Fires only when a plugin actually
+        # changed (hash skip + diff guard), so this is quiet in steady state.
+        #
+        # NOTE: a GITHUB_TOKEN-authored PR does not trigger pull_request CI; set a
+        # PAT/app token secret PREVIEW_BAKE_TOKEN so the PR runs checks + can be
+        # merged through the queue. Falls back to GITHUB_TOKEN otherwise.
+        env:
+          GH_TOKEN: ${{ secrets.PREVIEW_BAKE_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           cp .tmp/plugin-previews/manifest.json data/plugin-previews/manifest.json
           if git diff --quiet -- data/plugin-previews/manifest.json; then
-            echo "manifest unchanged"; exit 0
+            echo "manifest unchanged — nothing to review"; exit 0
           fi
+          BRANCH="chore/plugin-previews-${{ github.run_id }}"
           git config user.name "open-design-bot"
           git config user.email "bot@open-design.ai"
+          git checkout -b "$BRANCH"
           git add data/plugin-previews/manifest.json
-          git commit -m "chore(plugin-previews): refresh baked preview manifest [skip ci]"
-          git push origin HEAD:main
+          git commit -m "chore(plugin-previews): refresh baked preview manifest"
+          git push origin "$BRANCH"
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore(plugin-previews): refresh baked preview manifest" \
+            --reviewer lefarcen \
+            --body "Automated by \`bake-plugin-previews\`. The baked preview clips were re-rendered and uploaded to R2; this updates \`data/plugin-previews/manifest.json\` to match (the clips themselves are not committed — they live on R2).
+
+@lefarcen please review and merge."
 
       - name: Stop daemon
         if: always()
