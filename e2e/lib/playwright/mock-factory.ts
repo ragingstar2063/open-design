@@ -95,7 +95,7 @@ export async function fulfillAgentsRoute(
 
   const url = new URL(route.request().url());
   if (url.pathname !== '/api/agents') {
-    await route.continue();
+    await route.fallback();
     return;
   }
 
