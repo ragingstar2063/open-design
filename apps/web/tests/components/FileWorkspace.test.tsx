@@ -19,7 +19,7 @@ import {
   writeProjectTextFile,
   fetchProjectFolders,
 } from '../../src/providers/registry';
-import type { ProjectFile, ProjectFolder } from '../../src/types';
+import type { ChatMessage, ProjectFile, ProjectFolder } from '../../src/types';
 
 vi.mock('../../src/providers/registry', async () => {
   const actual = await vi.importActual<typeof import('../../src/providers/registry')>(
@@ -1753,4 +1753,48 @@ describe('FileWorkspace add-module menu', () => {
     });
   });
 
+});
+
+describe('FileWorkspace empty-project generation contract', () => {
+  function assistantMessage(runStatus: 'running' | 'failed'): ChatMessage {
+    return {
+      id: `msg-${runStatus}`,
+      role: 'assistant',
+      content: '',
+      createdAt: 1700000000,
+      startedAt: 1700000000,
+      runId: `run-${runStatus}`,
+      runStatus,
+      agentId: 'claude',
+      preTurnFileNames: [],
+      events: [{ kind: 'status', label: runStatus === 'failed' ? 'error' : 'thinking' }],
+    };
+  }
+
+  // The generation-preview card / transient `generating-tab` were removed: an
+  // empty project keeps the plain `design-files-empty` placeholder for running
+  // AND failed turns, with no card hijacking the surface.
+  it.each(['running', 'failed'] as const)(
+    'keeps the design-files empty placeholder and shows no generation card for a %s turn',
+    (runStatus) => {
+      render(
+        <FileWorkspace
+          projectId="project-1"
+          projectKind="prototype"
+          files={[]}
+          liveArtifacts={[]}
+          onRefreshFiles={vi.fn()}
+          isDeck={false}
+          streaming={runStatus === 'running'}
+          tabsState={{ tabs: [], active: DESIGN_FILES_TAB }}
+          onTabsStateChange={vi.fn()}
+          messages={[assistantMessage(runStatus)]}
+        />,
+      );
+
+      expect(screen.queryByTestId('generating-tab')).toBeNull();
+      expect(screen.queryByTestId('generation-preview-stage')).toBeNull();
+      expect(screen.getByTestId('design-files-empty')).toBeTruthy();
+    },
+  );
 });
