@@ -34,7 +34,7 @@ import {
   type QuestionForm,
 } from "../artifacts/question-form";
 import { parseSubmittedAnswers } from "./QuestionForm";
-import { splitStreamingArtifact, stripArtifact } from "../artifacts/strip";
+import { splitStreamingArtifact, stripArtifact, stripRecoveredHtmlFallbackForDisplay } from "../artifacts/strip";
 import {
   getPluginFolderCandidates,
   type PluginFolderCandidate,
@@ -53,11 +53,6 @@ import {
 import type { Dict } from "../i18n/types";
 import { agentDisplayName, agentIconId, exactAgentDisplayName } from "../utils/agentLabels";
 import { AgentIcon } from "./AgentIcon";
-import {
-  exactDateTime,
-  messageTime,
-  relativeTimeLong,
-} from "../utils/chatTime";
 import { filterImplicitProducedFiles } from "../produced-files";
 import type {
   AgentEvent,
@@ -123,16 +118,14 @@ type SkillPluginCandidateBlock = Extract<Block, { kind: "plugin-candidate" }>;
 function SkillPluginCandidateCard({
   block,
   projectId,
-  onDismissed,
   onRequestOpenFile,
 }: {
   block: SkillPluginCandidateBlock;
   projectId: string | null;
-  onDismissed: (candidateId: string) => void;
   onRequestOpenFile?: (name: string) => void;
 }) {
   const t = useT();
-  const [busy, setBusy] = useState<null | "draft" | "publish" | "contribute" | "dismiss">(null);
+  const [busy, setBusy] = useState<null | "draft" | "contribute">(null);
   const [notice, setNotice] = useState<ActionNotice | null>(null);
   const disabled = !projectId || busy !== null;
   const description =
@@ -193,9 +186,9 @@ function SkillPluginCandidateCard({
     }
   }
 
-  async function share(action: "publish-github" | "contribute-open-design") {
+  async function share(action: "contribute-open-design") {
     if (!projectId) return;
-    setBusy(action === "publish-github" ? "publish" : "contribute");
+    setBusy("contribute");
     setNotice(null);
     try {
       const data = await post(
@@ -203,28 +196,11 @@ function SkillPluginCandidateCard({
         { action },
       );
       setNotice({
-        message:
-          action === "publish-github"
-            ? `GitHub publish task started for ${data?.path ?? "the draft"}.`
-            : `Open Design contribution task started for ${data?.path ?? "the draft"}.`,
+        message: `Open Design contribution task started for ${data?.path ?? "the draft"}.`,
       });
     } catch (err) {
       setNotice({ message: err instanceof Error ? err.message : String(err) });
     } finally {
-      setBusy(null);
-    }
-  }
-
-  async function dismiss() {
-    if (!projectId) return;
-    setBusy("dismiss");
-    try {
-      await post(
-        `/api/projects/${encodeURIComponent(projectId)}/plugin-candidates/${encodeURIComponent(block.candidateId)}/dismiss`,
-      );
-      onDismissed(block.candidateId);
-    } catch (err) {
-      setNotice({ message: err instanceof Error ? err.message : String(err) });
       setBusy(null);
     }
   }
@@ -245,15 +221,6 @@ function SkillPluginCandidateCard({
               type="button"
               className="plugin-action-button plugin-action-button--primary"
               disabled={disabled}
-              onClick={() => void createDraft()}
-            >
-              <Icon name={busy === "draft" ? "spinner" : "plus"} size={13} />
-              <span>{busy === "draft" ? "Creating..." : t("skillPluginCandidate.createForMe")}</span>
-            </button>
-            <button
-              type="button"
-              className="plugin-action-button"
-              disabled={disabled}
               onClick={() => void share("contribute-open-design")}
             >
               <Icon name={busy === "contribute" ? "spinner" : "share"} size={13} />
@@ -263,19 +230,10 @@ function SkillPluginCandidateCard({
               type="button"
               className="plugin-action-button"
               disabled={disabled}
-              onClick={() => void share("publish-github")}
+              onClick={() => void createDraft()}
             >
-              <Icon name={busy === "publish" ? "spinner" : "github"} size={13} />
-              <span>{busy === "publish" ? "Starting..." : t("skillPluginCandidate.publishRepo")}</span>
-            </button>
-            <button
-              type="button"
-              className="plugin-action-button"
-              disabled={disabled}
-              onClick={() => void dismiss()}
-            >
-              <Icon name={busy === "dismiss" ? "spinner" : "close"} size={13} />
-              <span>{t("skillPluginCandidate.dismiss")}</span>
+              <Icon name={busy === "draft" ? "spinner" : "plus"} size={13} />
+              <span>{busy === "draft" ? "Creating..." : t("skillPluginCandidate.createForMe")}</span>
             </button>
           </div>
           {notice ? (
@@ -340,9 +298,9 @@ interface Props {
   onFeedback?: (change: ChatMessageFeedbackChange) => void;
   suppressDirectionForms?: boolean;
   hasDesignSystemContext?: boolean;
-  // "Next step" affordance handlers, surfaced under the last assistant message
-  // once it has produced a previewable (HTML) artifact. Omitting them hides
-  // the affordance entirely (e.g. in tests that don't wire chat send).
+  // "Next step" affordance handlers, surfaced under the last successful
+  // assistant message. Omitting them hides the affordance entirely (e.g. in
+  // tests that don't wire chat send).
   onArtifactShare?: (fileName: string) => void;
   onArtifactChip?: (fileName: string | null, prompt: string) => void;
 }
@@ -621,7 +579,8 @@ function AssistantMessageImpl({
     hasEmptyResponse ||
     !!copyMarkdown ||
     canFork;
-  const showOpenDesignSubmission = !!onShareToOpenDesign && !!isLast && showFeedback;
+  const showOpenDesignSubmission =
+    !!onShareToOpenDesign && !!isLast && showFeedback && runSucceeded;
   const showNextStepActions =
     !streaming &&
     !!isLast &&
@@ -634,9 +593,6 @@ function AssistantMessageImpl({
   // start so switching project tabs or remounting the message cannot restart it.
   const hasContent = blocks.some((b) => b.kind !== "status") || fileOps.length > 0;
   const preparing = streaming && !hasContent;
-  const [dismissedCandidateIds, setDismissedCandidateIds] = useState<Set<string>>(
-    () => new Set()
-  );
   // Route interactive tool answers (currently AskUserQuestion) back to the
   // still-open stream-json child via the daemon. We resolve to `true` on
   // success so the card can flip into its answered state; on `false` (run
@@ -685,6 +641,7 @@ function AssistantMessageImpl({
               <ProseBlock
                 key={i}
                 text={b.text}
+                hideRecoveredHtmlFallback={message.agentId === "grok-build" && !streaming}
                 assistantMessageId={message.id}
                 isLastAssistant={!!isLast}
                 streaming={streaming}
@@ -730,19 +687,11 @@ function AssistantMessageImpl({
             return <LiveCodeBox key={b.id} name={b.name} raw={b.raw} />;
           }
           if (b.kind === "plugin-candidate") {
-            if (dismissedCandidateIds.has(b.candidateId)) return null;
             return (
               <SkillPluginCandidateCard
                 key={i}
                 block={b}
                 projectId={projectId}
-                onDismissed={(candidateId) =>
-                  setDismissedCandidateIds((prev) => {
-                    const next = new Set(prev);
-                    next.add(candidateId);
-                    return next;
-                  })
-                }
                 onRequestOpenFile={onRequestOpenFile}
               />
             );
@@ -835,7 +784,6 @@ function AssistantMessageImpl({
                   onFork: canFork ? onForkFromMessage : undefined,
                   forking,
                   forceVisible: true,
-                  message,
                   isLast: !!isLast,
                 }}
               />
@@ -851,7 +799,6 @@ function AssistantMessageImpl({
                 copyMarkdown={copyMarkdown}
                 onFork={canFork ? onForkFromMessage : undefined}
                 forking={forking}
-                message={message}
                 isLast={!!isLast}
               />
             )}
@@ -912,6 +859,18 @@ function inferProducedFilesFromTurn({
   ).sort((a, b) => b.mtime - a.mtime);
 }
 
+// A run that reached a terminal state — succeeded, failed, or canceled — has a
+// settled assistant turn worth rating. Only queued/running turns are still in
+// flight, so they have no outcome to give feedback on yet. Feedback used to be
+// gated on success alone, which silently dropped the thumbs row on failed and
+// canceled turns even though those are exactly the outcomes a user most wants
+// to thumbs-down.
+function isTerminalRunStatus(
+  status: NonNullable<ChatMessage["runStatus"]>
+): boolean {
+  return status === "succeeded" || status === "failed" || status === "canceled";
+}
+
 function isFeedbackEligible({
   streaming,
   message,
@@ -924,28 +883,8 @@ function isFeedbackEligible({
   hasUnfinishedTodos: boolean;
 }): boolean {
   if (streaming || hasEmptyResponse || hasUnfinishedTodos) return false;
-  if (message.runStatus) return message.runStatus === "succeeded";
+  if (message.runStatus) return isTerminalRunStatus(message.runStatus);
   return !!message.endedAt;
-}
-
-function MessageTimestamp({
-  message,
-  t,
-}: {
-  message: ChatMessage;
-  t: TranslateFn;
-}) {
-  const ts = messageTime(message);
-  if (!ts) return null;
-  return (
-    <time
-      className="msg-time"
-      dateTime={new Date(ts).toISOString()}
-      title={exactDateTime(ts)}
-    >
-      {relativeTimeLong(ts, t)}
-    </time>
-  );
 }
 
 // The agent name without the trailing model id — the role header shows the
@@ -1025,7 +964,6 @@ interface AssistantFooterProps {
   forking?: boolean;
   feedbackControls?: ReactNode;
   forceVisible?: boolean;
-  message?: ChatMessage;
   // The most recent assistant reply keeps its footer permanently visible
   // (not hover-gated), matching Lobe Chat's persistent last-message footer.
   isLast?: boolean;
@@ -1044,7 +982,6 @@ function AssistantFooter({
   forking = false,
   feedbackControls,
   forceVisible = false,
-  message,
   isLast = false,
 }: AssistantFooterProps) {
   const t = useT();
@@ -1105,7 +1042,6 @@ function AssistantFooter({
           {feedbackControls}
         </span>
       ) : null}
-      {!streaming && message ? <MessageTimestamp message={message} t={t} /> : null}
     </div>
   );
 }
@@ -1938,6 +1874,7 @@ function hasPluginFinalActionHint(content: string): boolean {
 
 function ProseBlock({
   text,
+  hideRecoveredHtmlFallback,
   assistantMessageId,
   isLastAssistant,
   streaming,
@@ -1950,6 +1887,7 @@ function ProseBlock({
   onRequestOpenFile,
 }: {
   text: string;
+  hideRecoveredHtmlFallback?: boolean;
   assistantMessageId: string;
   isLastAssistant: boolean;
   streaming: boolean;
@@ -1962,7 +1900,10 @@ function ProseBlock({
   onRequestOpenFile?: (name: string) => void;
 }) {
   const t = useT();
-  const cleaned = useMemo(() => stripArtifact(text), [text]);
+  const cleaned = useMemo(() => {
+    const stripped = stripArtifact(text);
+    return hideRecoveredHtmlFallback ? stripRecoveredHtmlFallbackForDisplay(stripped, text) : stripped;
+  }, [hideRecoveredHtmlFallback, text]);
   // While the latest turn is still streaming a not-yet-closed question-form,
   // drop the partial `<question-form>{…` markup from the prose so the chat
   // doesn't flash raw JSON; we surface a banner for it instead. The actual

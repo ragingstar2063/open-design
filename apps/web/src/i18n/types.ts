@@ -904,6 +904,7 @@ export interface Dict {
   'workingDirPicker.showInFileManager': string;
   'workingDirPicker.replace': string;
   'workingDirPicker.recent': string;
+  'workingDirPicker.defaultLabel': string;
   'handoff.toTarget': string;
   'handoff.openInTarget': string;
   'handoff.openAction': string;
@@ -1066,8 +1067,6 @@ export interface Dict {
   'pluginCard.contributeTitle': string;
   'skillPluginCandidate.createForMe': string;
   'skillPluginCandidate.contributeToMain': string;
-  'skillPluginCandidate.publishRepo': string;
-  'skillPluginCandidate.dismiss': string;
   'skillPluginCandidate.repoDescription': string;
   'integrations.kicker': string;
   'integrations.lede': string;
@@ -2176,7 +2175,6 @@ export interface Dict {
   "chat.designToolbox.title": string;
   "chat.designToolbox.tooltip": string;
   "chat.designToolbox.aria": string;
-  "chat.designToolbox.lucky": string;
   "chat.designToolbox.searchPlaceholder": string;
   "chat.designToolbox.searchAria": string;
   "chat.designToolbox.followupSection": string;
