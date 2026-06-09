@@ -50,12 +50,13 @@ const BAKE_VERSION = 2;
 const BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:17579';
 const RENDER_W = 1440;          // pages lay out at their desktop width
 const VIEW_H = 1099;            // 1.31-aspect window showing the FULL width (no clip)
-// Fixed-viewport decks (PPT/slideshow: a 100vh page navigated by arrow keys or
-// the wheel, NOT vertical scroll) are captured at 16:9 instead — their layout
-// targets a slide aspect, and the 1.31 window collapses them into a compact
-// responsive variant (hero headline replaced by a condensed strip).
-const DECK_W = 1600;
-const DECK_H = 900;
+// Decks (PPT/slideshow: a fixed 100vh page navigated by arrow keys or the wheel,
+// NOT vertical scroll) are captured at the SAME 1.31 tile aspect as everything
+// else — so the clip fills the card with no crop or letterbox — but at a larger
+// width. At the normal 1440 width decks hit a width breakpoint and collapse into
+// a compact variant (hero headline -> condensed strip); 1760 clears it.
+const DECK_W = 1760;
+const DECK_H = 1344;            // 1760/1344 = 1.31, the tile aspect
 const SLIDE_MS = 1150;          // deck per-slide dwell: ~.9s CSS transition + settle
 const MAX_SLIDES = 6;           // advance budget; HOLD + slides stays ~<=9s
 const OUT_W = Number(process.env.PREVIEW_W || 640); // small — tile renders ~393px
@@ -145,26 +146,19 @@ async function driveDeck(page, driver) {
   });
 }
 
-// Walk a deck through its slides (played past the HOLD on hover). Adaptively
-// finds the driver that actually moves it — arrow keys (the family default),
-// then wheel, then a "next" control — by checking deckSignal after each input.
-// Returns the wall-clock span of the walk (the manifest's durationMs).
-async function walkSlides(page) {
-  const drivers = ['arrow', 'wheel', 'click'];
-  let di = 0, moved = 0;
+// Walk a deck through its slides with the driver detection already found (arrow
+// or wheel), played past the HOLD on hover. Stops at the last slide (an input
+// that no longer changes deckSignal). A null driver is a fixed single slide with
+// no navigation — just hold. Returns the wall-clock span (the manifest durationMs).
+async function walkSlides(page, driver) {
+  if (!driver) return SLIDE_MS;
+  let moved = 0;
   const t0 = Date.now();
   for (let s = 0; s < MAX_SLIDES; s += 1) {
     const before = await page.evaluate(deckSignal);
-    await driveDeck(page, drivers[di]);
+    await driveDeck(page, driver);
     await sleep(SLIDE_MS);
-    const after = await page.evaluate(deckSignal);
-    if (after === before) {
-      // This driver did nothing. If we haven't moved at all yet, try the next
-      // driver (the dead input just reads as a slightly longer dwell on slide 1);
-      // otherwise we've reached the last slide — stop.
-      if (moved === 0 && di < drivers.length - 1) { di += 1; s -= 1; continue; }
-      break;
-    }
+    if ((await page.evaluate(deckSignal)) === before) break; // reached the last slide
     moved += 1;
   }
   return Math.max(SLIDE_MS, Date.now() - t0);
@@ -181,13 +175,31 @@ async function bakeOne(browser, id, hash) {
   } catch (e) { await page.close(); return { id, skipped: `load ${e.message}` }; }
   await sleep(1000);
 
-  // A deck (PPT/slideshow) is a fixed 100vh page navigated by key/wheel, not a
-  // scrollable column. Detect it (no taller than the viewport) and re-render at
-  // 16:9 — its slide layout targets that aspect — then walk its slides below
-  // instead of vertically panning a page that has nothing to scroll.
-  const isDeck = await page.evaluate(
-    () => document.documentElement.scrollHeight <= window.innerHeight * 1.15,
+  // Classify navigation by PROBING, not guessing from scrollHeight: press the
+  // arrow key, then nudge the wheel, and see whether a slide actually moves
+  // (deckSignal ignores the WebGL background, so only real navigation counts).
+  // Most decks are arrow-key; some advance on the wheel; the rest are ordinary
+  // vertical-scroll pages (incl. up/down decks) and keep the linear pan. Probing
+  // advances the deck, so decks reload to reset to slide 1 before capturing.
+  let deckDriver = null;
+  {
+    const sig0 = await page.evaluate(deckSignal);
+    await driveDeck(page, 'arrow');
+    await sleep(900);
+    if ((await page.evaluate(deckSignal)) !== sig0) deckDriver = 'arrow';
+    else {
+      await driveDeck(page, 'wheel');
+      await sleep(900);
+      if ((await page.evaluate(deckSignal)) !== sig0) deckDriver = 'wheel';
+    }
+  }
+  const vScrollable = await page.evaluate(
+    () => document.documentElement.scrollHeight > window.innerHeight * 1.15,
   );
+  // A horizontally-navigable deck OR a fixed-viewport single slide is a deck:
+  // capture at the deck aspect and walk it. A page that only scrolls vertically
+  // (a landing page, or an up/down deck) keeps the linear pan.
+  const isDeck = deckDriver !== null || !vScrollable;
   let capW = RENDER_W, capH = VIEW_H;
   if (isDeck) {
     capW = DECK_W; capH = DECK_H;
@@ -290,7 +302,7 @@ async function bakeOne(browser, id, hash) {
   // pages linear-pan (constant velocity) top -> bottom.
   let durMs;
   if (isDeck) {
-    durMs = await walkSlides(page);
+    durMs = await walkSlides(page, deckDriver);
   } else {
     // Pre-computed from the measured page height so the pan always reaches the
     // bottom within MAX_PAN (whole clip stays ~<=10s): base VELOCITY for normal
