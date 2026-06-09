@@ -6,6 +6,11 @@ import {
   velaLogout,
   type VelaLoginStatus,
 } from '../providers/daemon';
+import { useAnalytics } from '../analytics/provider';
+import {
+  recordAmrEntry,
+  type TrackingAmrEntrySource,
+} from '../analytics/amr-attribution';
 import { useI18n } from '../i18n';
 import {
   AMR_LOGIN_STATUS_EVENT,
@@ -15,6 +20,7 @@ import {
   amrLoginStatusEventReason,
   notifyAmrLoginStatusChanged,
 } from './amrLoginPolling';
+import { amrConsoleUrlForProfile, amrProfileBadgeLabel } from '../runtime/amr-guidance';
 
 interface AmrLoginPillProps {
   className?: string;
@@ -23,9 +29,17 @@ interface AmrLoginPillProps {
   initialStatus?: VelaLoginStatus | null;
   skipInitialRefresh?: boolean;
   signInLabel?: string;
+  amrEntrySourceDetail?: TrackingAmrEntrySource;
   revealPendingCancelAction?: boolean;
+  showConsoleAction?: boolean;
   onStatusChange?: (status: VelaLoginStatus | null) => void;
 }
+
+const AMR_LOGIN_REUSE_ENTRY_SOURCES: readonly TrackingAmrEntrySource[] = [
+  'settings_amr_agent_card',
+  'chat_error_authorize_retry',
+  'generation_preview_authorize_retry',
+];
 
 export type AmrAccountControlStatus =
   | 'signed-out'
@@ -46,6 +60,8 @@ export interface AmrAccountControlProps {
   hideSignedOutStatus?: boolean;
   hideSignedInStatus?: boolean;
   signInLabel?: string;
+  showConsoleAction?: boolean;
+  consoleUrl?: string;
   showCancelSignInAction?: boolean;
   onSignIn?: (event: MouseEvent<HTMLButtonElement>) => void;
   onSignOut?: (event: MouseEvent<HTMLButtonElement>) => void;
@@ -57,7 +73,7 @@ export interface AmrAccountControlProps {
 
 const AMR_CANCELED_RESET_MS = 1500;
 
-function closeAmrActivationWindowBestEffort(): boolean {
+export function closeAmrActivationWindowBestEffort(): boolean {
   if (typeof window === 'undefined') return false;
   if (window.opener == null) return false;
   try {
@@ -66,12 +82,6 @@ function closeAmrActivationWindowBestEffort(): boolean {
   } catch {
     return false;
   }
-}
-
-function profileBadgeLabel(profile: string | undefined): string | null {
-  if (profile === 'test') return 'TEST';
-  if (profile === 'local') return 'LOCAL';
-  return null;
 }
 
 function classNames(...names: Array<string | false | null | undefined>): string {
@@ -83,12 +93,15 @@ export function AmrAccountControl({
   className,
   compact = false,
   email = '',
+  errorMessage,
   profile,
   showProfileBadge = false,
   showSignInAction = true,
   hideSignedOutStatus = false,
   hideSignedInStatus = false,
   signInLabel,
+  showConsoleAction = false,
+  consoleUrl,
   showCancelSignInAction = false,
   onSignIn,
   onSignOut,
@@ -98,11 +111,14 @@ export function AmrAccountControl({
   cancelSignInDisabled = false,
 }: AmrAccountControlProps) {
   const { t } = useI18n();
-  const badgeLabel = showProfileBadge ? profileBadgeLabel(profile) : null;
   const isSignedIn = status === 'signed-in';
   const isSigningIn = status === 'signing-in';
   const isCanceled = status === 'canceled';
   const hasError = status === 'error';
+  const badgeLabel = showProfileBadge ? amrProfileBadgeLabel(profile) : null;
+  const visibleBadgeLabel = isSignedIn ? badgeLabel : null;
+  const resolvedConsoleUrl = consoleUrl ?? amrConsoleUrlForProfile(profile);
+  const loginErrorText = errorMessage || t('settings.amrLoginErrorCompact');
   const statusText = isSignedIn
     ? hideSignedInStatus
       ? ''
@@ -128,7 +144,23 @@ export function AmrAccountControl({
       aria-label={t('settings.amrAccountStatus')}
     >
       {statusText ? (
-        <span className="amr-account-control__status">{statusText}</span>
+        <span className="amr-account-control__status">
+          <span className="amr-account-control__status-text">{statusText}</span>
+          {visibleBadgeLabel ? (
+            <span className="amr-login-pill-badge">{visibleBadgeLabel}</span>
+          ) : null}
+        </span>
+      ) : null}
+      {isSignedIn && showConsoleAction ? (
+        <a
+          className="amr-account-control__action"
+          href={resolvedConsoleUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={t('settings.amrConsole')}
+        >
+          {t('settings.amrConsole')}
+        </a>
       ) : null}
       {isSignedIn && onSignOut ? (
         <button
@@ -163,12 +195,9 @@ export function AmrAccountControl({
           {signInLabel ?? t('settings.amrSignIn')}
         </button>
       ) : null}
-      {badgeLabel ? (
-        <span className="amr-login-pill-badge">{badgeLabel}</span>
-      ) : null}
       {hasError ? (
         <span className="amr-account-control__error" role="alert">
-          {t('settings.amrLoginErrorCompact')}
+          {loginErrorText}
         </span>
       ) : null}
     </div>
@@ -185,10 +214,13 @@ export function AmrLoginPill({
   initialStatus = null,
   skipInitialRefresh = false,
   signInLabel,
+  amrEntrySourceDetail,
   revealPendingCancelAction = false,
+  showConsoleAction = false,
   onStatusChange,
 }: AmrLoginPillProps) {
   const { t } = useI18n();
+  const analytics = useAnalytics();
   const [status, setStatus] = useState<VelaLoginStatus | null>(initialStatus);
   const [pending, setPending] = useState<null | 'login' | 'logout' | 'cancel'>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -206,9 +238,12 @@ export function AmrLoginPill({
 
   const refresh = useCallback(async () => {
     const next = await fetchVelaLoginStatus();
-    if (next) setStatus(next);
+    if (next) {
+      setStatus(next);
+      onStatusChange?.(next);
+    }
     return next;
-  }, []);
+  }, [onStatusChange]);
 
   useEffect(() => {
     if (!skipInitialRefresh) void refresh();
@@ -221,7 +256,20 @@ export function AmrLoginPill({
 
   useEffect(() => {
     setStatus(initialStatus);
-  }, [initialStatus]);
+    // A signed-in status pushed in from the host (e.g. the Settings card
+    // refetching on window focus after an out-of-band login) is authoritative:
+    // clear any stale login error/pending the early-stopped poll left behind so
+    // `accountStatus`, which ranks `errorMessage` above `loggedIn`, doesn't keep
+    // the pill stuck on Authorize.
+    if (initialStatus?.loggedIn) {
+      stopPolling();
+      loginStartedAtRef.current = null;
+      loginPendingRef.current = false;
+      setErrorMessage(null);
+      setPending(null);
+      setCanceledVisible(false);
+    }
+  }, [initialStatus, stopPolling]);
 
   useEffect(() => {
     if (!canceledVisible) return;
@@ -339,7 +387,12 @@ export function AmrLoginPill({
       loginStartedAtRef.current = startedAt;
       setErrorMessage(null);
       setPending('login');
-      const result = await startVelaLogin();
+      const attribution = amrEntrySourceDetail
+        ? recordAmrEntry(analytics.track, amrEntrySourceDetail, new Date(), {
+            reuseExistingFrom: AMR_LOGIN_REUSE_ENTRY_SOURCES,
+          })
+        : null;
+      const result = await startVelaLogin(attribution);
       if (!result.ok && !result.alreadyRunning) {
         loginStartedAtRef.current = null;
         loginPendingRef.current = false;
@@ -350,7 +403,7 @@ export function AmrLoginPill({
       notifyAmrLoginStatusChanged('login-started');
       startPolling(startedAt);
     },
-    [startPolling, t],
+    [amrEntrySourceDetail, analytics.track, startPolling, t],
   );
 
   const handleCancelLogin = useCallback(
@@ -431,11 +484,13 @@ export function AmrLoginPill({
         status={accountStatus}
         compact
         email={userEmail}
+        errorMessage={errorMessage}
         profile={status?.profile}
         showProfileBadge
         hideSignedOutStatus={hideSignedOutStatus}
         hideSignedInStatus={hideSignedInStatus}
         signInLabel={signInLabel}
+        showConsoleAction={showConsoleAction}
         signInDisabled={loginInFlight}
         signOutDisabled={logoutInFlight}
         showCancelSignInAction={revealPendingCancelAction && loginInFlight}

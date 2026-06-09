@@ -6,6 +6,7 @@ import { promises as dnsPromises } from 'node:dns';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { Socks5ProxyAgent } from 'undici';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as platform from '@open-design/platform';
@@ -23,6 +24,7 @@ import {
 } from '../src/connectionTest.js';
 import { listProviderModels } from '../src/providerModels.js';
 import { startServer } from '../src/server.js';
+import { rememberLiveModels } from '../src/runtimes/models.js';
 
 type FetchInput = Parameters<typeof fetch>[0];
 type FetchInit = Parameters<typeof fetch>[1];
@@ -35,6 +37,7 @@ interface StartedServer {
 const realFetch = globalThis.fetch;
 let baseUrl: string;
 let server: http.Server;
+const FAKE_VELA_FIXTURE = path.resolve(process.cwd(), 'tests', 'fixtures', 'fake-vela.mjs');
 
 function jsonResponse(body: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(body), {
@@ -86,12 +89,52 @@ async function withFakeAgent<T>(
   }
 }
 
+async function withOnlyFakeAgent<T>(
+  binName: string,
+  script: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'od-conn-test-bin-'));
+  const oldPath = process.env.PATH;
+  const oldAgentHome = process.env.OD_AGENT_HOME;
+  const oldClaudeBin = process.env.CLAUDE_BIN;
+  try {
+    if (process.platform === 'win32') {
+      const runner = path.join(dir, `${binName}-test-runner.cjs`);
+      await fsp.writeFile(runner, script);
+      await fsp.writeFile(
+        path.join(dir, `${binName}.cmd`),
+        `@echo off\r\nnode "${runner}" %*\r\n`,
+      );
+    } else {
+      const bin = path.join(dir, binName);
+      await fsp.writeFile(bin, `#!/usr/bin/env node\n${script}`);
+      await fsp.chmod(bin, 0o755);
+    }
+    process.env.PATH = dir;
+    process.env.OD_AGENT_HOME = dir;
+    delete process.env.CLAUDE_BIN;
+    return await run();
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldAgentHome === undefined) delete process.env.OD_AGENT_HOME;
+    else process.env.OD_AGENT_HOME = oldAgentHome;
+    if (oldClaudeBin === undefined) delete process.env.CLAUDE_BIN;
+    else process.env.CLAUDE_BIN = oldClaudeBin;
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+}
+
 async function withFakeCodex<T>(script: string, run: () => Promise<T>): Promise<T> {
   return withFakeAgent('codex', script, run);
 }
 
 async function withFakeClaude<T>(script: string, run: () => Promise<T>): Promise<T> {
   return withFakeAgent('claude', script, run);
+}
+
+async function withOnlyFakeOpenClaude<T>(script: string, run: () => Promise<T>): Promise<T> {
+  return withOnlyFakeAgent('openclaude', script, run);
 }
 
 async function withFakeOpenCode<T>(script: string, run: () => Promise<T>): Promise<T> {
@@ -1945,6 +1988,65 @@ describe('POST /api/test/connection provider mode', () => {
 });
 
 describe('POST /api/test/connection agent mode', () => {
+  it('uses the AMR profile-scoped remembered model during connection tests when no explicit model is selected', async () => {
+    rememberLiveModels('amr', [{ id: 'local-scoped-model', label: 'local-scoped-model' }], 'local');
+
+    await withFakeAgent(
+      'vela',
+      `void import(${JSON.stringify(pathToFileURL(FAKE_VELA_FIXTURE).href)});\n`,
+      async () => {
+        const result = await testAgentConnection({
+          agentId: 'amr',
+          agentCliEnv: {
+            amr: {
+              OPEN_DESIGN_AMR_PROFILE: 'local',
+            },
+          },
+        });
+
+        expect(result).toMatchObject({
+          ok: true,
+          kind: 'success',
+          agentName: 'AMR',
+          sample: 'Hello from fake vela.',
+        });
+      },
+    );
+  });
+
+  it('resolves the AMR connection-test scope from the merged launch env', async () => {
+    rememberLiveModels('amr', [{ id: 'local-env-model', label: 'local-env-model' }], 'local');
+    const previousProfile = process.env.OPEN_DESIGN_AMR_PROFILE;
+    process.env.OPEN_DESIGN_AMR_PROFILE = 'local';
+
+    try {
+      await withFakeAgent(
+        'vela',
+        `void import(${JSON.stringify(pathToFileURL(FAKE_VELA_FIXTURE).href)});\n`,
+        async () => {
+          const result = await testAgentConnection({
+            agentId: 'amr',
+            agentCliEnv: {
+              amr: {
+                VELA_BIN: '/tmp/fake-vela-bin',
+              },
+            },
+          });
+
+          expect(result).toMatchObject({
+            ok: true,
+            kind: 'success',
+            agentName: 'AMR',
+            sample: 'Hello from fake vela.',
+          });
+        },
+      );
+    } finally {
+      if (previousProfile === undefined) delete process.env.OPEN_DESIGN_AMR_PROFILE;
+      else process.env.OPEN_DESIGN_AMR_PROFILE = previousProfile;
+    }
+  });
+
   it('reports success for a fake Codex agent response', async () => {
     await withFakeCodex(
       `
@@ -2197,6 +2299,58 @@ process.stdin.on('end', () => {
         });
       },
     );
+  });
+
+  it('preserves ANTHROPIC_API_KEY when Claude adapter launches the OpenClaude fallback', async () => {
+    const envFile = path.join(os.tmpdir(), `od-openclaude-env-${Date.now()}-${Math.random()}.json`);
+    const previousKey = process.env.ANTHROPIC_API_KEY;
+    try {
+      process.env.ANTHROPIC_API_KEY = 'sk-openclaude-test';
+      await withOnlyFakeOpenClaude(
+        `
+const fs = require('node:fs');
+fs.writeFileSync(${JSON.stringify(envFile)}, JSON.stringify({
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || null,
+}));
+let input = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { input += chunk; });
+process.stdin.on('end', () => {
+  try {
+    JSON.parse(input.trim());
+    console.log(JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: 'msg_1',
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+      },
+    }));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exit(1);
+  }
+});
+`,
+        async () => {
+          const result = await testAgentConnection({ agentId: 'claude' });
+
+          expect(result).toMatchObject({
+            ok: true,
+            kind: 'success',
+            agentName: 'Claude Code',
+          });
+          await expect(fsp.readFile(envFile, 'utf8')).resolves.toBe(
+            JSON.stringify({ ANTHROPIC_API_KEY: 'sk-openclaude-test' }),
+          );
+          expect(result.diagnostics?.binaryPath ?? '').toMatch(/openclaude/i);
+        },
+      );
+    } finally {
+      if (previousKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previousKey;
+      await fsp.rm(envFile, { force: true });
+    }
   });
 
   it('returns Claude /login guidance when the spawned CLI cannot authenticate', async () => {

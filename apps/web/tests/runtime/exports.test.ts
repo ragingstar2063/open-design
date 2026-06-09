@@ -5,12 +5,15 @@ import {
   archiveRootFromFilePath,
   buildDesignHandoffContent,
   buildDesignManifestContent,
+  downloadImageDataUrl,
   buildSandboxedPreviewDocument,
   exportAsImage,
   exportAsMd,
   exportAsPdf,
+  exportProjectAsHtml,
   exportProjectAsPdf,
   openSandboxedPreviewInNewTab,
+  prepareImageExportTarget,
   requestPreviewSnapshot,
 } from '../../src/runtime/exports';
 
@@ -235,6 +238,76 @@ describe('exportProjectAsPdf', () => {
   });
 });
 
+describe('exportProjectAsHtml', () => {
+  let capturedBlob: Blob | undefined;
+  let capturedFilename: string | undefined;
+
+  beforeEach(() => {
+    capturedBlob = undefined;
+    capturedFilename = undefined;
+    vi.stubGlobal('URL', {
+      createObjectURL: (blob: Blob) => {
+        capturedBlob = blob;
+        return 'blob:test';
+      },
+      revokeObjectURL: () => {},
+    });
+    vi.stubGlobal('document', {
+      createElement: () => {
+        const anchor = { href: '', click: () => {} } as { href: string; download?: string; click: () => void };
+        Object.defineProperty(anchor, 'download', {
+          set(value: string) {
+            capturedFilename = value;
+          },
+          get() {
+            return capturedFilename ?? '';
+          },
+        });
+        return anchor;
+      },
+      body: { appendChild: () => {}, removeChild: () => {} },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('downloads daemon-inlined project HTML instead of the raw source body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><p>inlined</p>', {
+      headers: { 'content-type': 'text/html' },
+      status: 200,
+    })));
+
+    await exportProjectAsHtml({
+      projectId: 'proj 1',
+      filePath: 'screens/main page.html',
+      fallbackHtml: '<script type="module" src="/src/main.tsx"></script>',
+      fallbackTitle: 'Main Page',
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/projects/proj%201/export/screens/main%20page.html?inline=1');
+    expect(capturedFilename).toBe('Main-Page.html');
+    expect(await capturedBlob!.text()).toBe('<!doctype html><p>inlined</p>');
+  });
+
+  it('falls back to the source HTML export when the daemon inline endpoint fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
+
+    await exportProjectAsHtml({
+      projectId: 'proj-1',
+      filePath: 'index.html',
+      fallbackHtml: '<main>fallback</main>',
+      fallbackTitle: 'Fallback',
+    });
+
+    expect(capturedFilename).toBe('Fallback.html');
+    expect(await capturedBlob!.text()).toContain('<main>fallback</main>');
+  });
+});
+
 // `exportAsMd` is a pass-through (the file body is the artifact source
 // verbatim, only the extension and Content-Type flip). Tests exercise it
 // end-to-end by stubbing the few DOM globals `triggerDownload` touches —
@@ -324,6 +397,10 @@ describe('sandboxed preview Blob exports', () => {
       revokeObjectURL: vi.fn(),
     });
     vi.stubGlobal('window', {
+      location: {
+        href: 'https://open-design.test/plugins/example',
+        origin: 'https://open-design.test',
+      },
       open: (_url: string, _target: string, features?: string) => {
         openCalls.push([_url, _target]);
         openedFeatures = features;
@@ -348,6 +425,14 @@ describe('sandboxed preview Blob exports', () => {
     expect(wrapper).not.toContain('allow-same-origin');
     expect(wrapper).toContain('&lt;script&gt;window.parent.localStorage.clear()&lt;/script&gt;');
     expect(wrapper).not.toContain('<script>window.parent.localStorage.clear()</script>');
+  });
+
+  it('anchors new-tab srcdoc previews to the current origin when no explicit base is provided', async () => {
+    openSandboxedPreviewInNewTab('<img src="/api/plugins/example/assets/hero.png"><img src="assets/card.png">', 'Plugin preview');
+
+    expect(capturedBlob).toBeDefined();
+    const wrapper = await capturedBlob!.text();
+    expect(wrapper).toContain('&lt;base href=&quot;https://open-design.test/&quot;&gt;');
   });
 
   it('passes srcdoc options through the sandboxed new-tab wrapper', async () => {
@@ -502,6 +587,13 @@ describe('sandboxed preview Blob exports', () => {
     expect(htmlArg).toContain("img.addEventListener('load'");
     expect(htmlArg).toContain("img.addEventListener('error'");
     expect(htmlArg).toContain('img.complete');
+    expect(htmlArg).toContain('waitForCssBackgroundImages');
+    expect(htmlArg).toContain('window.getComputedStyle');
+    expect(htmlArg).toContain('style.backgroundImage');
+    expect(htmlArg).toContain('style.borderImageSource');
+    expect(htmlArg).toContain('style.listStyleImage');
+    expect(htmlArg).toContain('new Image()');
+    expect(htmlArg).toContain('requestAnimationFrame');
     // The original font- and load-waiting logic must still be present.
     expect(htmlArg).toContain('document.fonts');
     expect(htmlArg).toContain('OD_PRINT_READY');
@@ -672,12 +764,14 @@ describe('requestPreviewSnapshot', () => {
 
 describe('exportAsImage', () => {
   let clickMock: ReturnType<typeof vi.fn>;
+  let createObjectURLMock: ReturnType<typeof vi.fn>;
   let anchors: Array<{ href: string; download: string; click: ReturnType<typeof vi.fn> }>;
 
   beforeEach(() => {
     clickMock = vi.fn();
+    createObjectURLMock = vi.fn(() => 'blob:mock-url');
     anchors = [];
-    vi.stubGlobal('URL', { createObjectURL: () => 'blob:mock-url', revokeObjectURL: vi.fn() });
+    vi.stubGlobal('URL', { createObjectURL: createObjectURLMock, revokeObjectURL: vi.fn() });
     vi.stubGlobal('document', {
       createElement: () => {
         const el = { href: '', download: '', click: clickMock };
@@ -711,5 +805,73 @@ describe('exportAsImage', () => {
     exportAsImage('data:image/png;base64,AA==', 'Hello <World> / Test!');
 
     expect(anchors[0]!.download).toBe('Hello-World-Test.png');
+  });
+
+  it('does not download an empty image snapshot', () => {
+    expect(() => exportAsImage('data:image/png;base64,', 'Empty')).toThrow('Image snapshot is empty');
+
+    expect(clickMock).not.toHaveBeenCalled();
+    expect(anchors).toHaveLength(0);
+  });
+
+  it('downloads a validated image data URL without creating a blob URL', () => {
+    const dataUrl = 'data:image/png;base64,AA==';
+
+    downloadImageDataUrl(dataUrl, 'workspace.png');
+
+    expect(clickMock).toHaveBeenCalledOnce();
+    expect(createObjectURLMock).not.toHaveBeenCalled();
+    expect(anchors[0]!.href).toBe(dataUrl);
+    expect(anchors[0]!.download).toBe('workspace.png');
+  });
+
+  it('does not download an empty image data URL', () => {
+    expect(() => downloadImageDataUrl('data:image/png;base64,', 'workspace.png')).toThrow('Image snapshot is empty');
+
+    expect(clickMock).not.toHaveBeenCalled();
+    expect(anchors).toHaveLength(0);
+  });
+
+  it('falls back to download when the native save picker is blocked', async () => {
+    const showSaveFilePicker = vi.fn().mockRejectedValue(
+      new DOMException('Must be handling a user gesture to show a file picker.', 'SecurityError'),
+    );
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'jpeg');
+
+    expect(showSaveFilePicker).toHaveBeenCalledOnce();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.jpg');
+
+    await target?.save(new Blob(['jpeg'], { type: 'image/jpeg' }));
+
+    expect(clickMock).toHaveBeenCalledOnce();
+    expect(anchors[0]!.download).toBe('My-Design.jpg');
+  });
+
+  it('falls back to download when the native save picker reports a cross-realm SecurityError', async () => {
+    const securityError = Object.assign(new Error('Must be handling a user gesture to show a file picker.'), {
+      name: 'SecurityError',
+    });
+    const showSaveFilePicker = vi.fn().mockRejectedValue(securityError);
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'webp');
+
+    expect(showSaveFilePicker).toHaveBeenCalledOnce();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.webp');
+  });
+
+  it('can skip the native save picker to avoid pre-creating empty files', async () => {
+    const showSaveFilePicker = vi.fn();
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'png', { useNativePicker: false });
+
+    expect(showSaveFilePicker).not.toHaveBeenCalled();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.png');
   });
 });

@@ -46,15 +46,18 @@ import {
   cursorAuthGuidance,
   probeAgentAuthStatus,
 } from './runtimes/auth.js';
+import { loadMmdRouteLaunchEnv } from './runtimes/mmd-routes.js';
 import {
   buildLegacyMaxTokensParam,
   buildMaxCompletionTokensParam,
   buildOpenAIChatTokenParam,
   isUnsupportedMaxTokensError,
 } from './openai-chat-token-params.js';
+import { aihubmixHeaders } from './aihubmix.js';
 import type { AgentCliEnvPrefs } from './app-config.js';
 import type { RuntimeAgentDef } from './runtimes/types.js';
 import { resolveModelForAgent } from './runtimes/models.js';
+import { preparePromptFileForAgent, type PreparedPromptFile } from './runtimes/prompt-file.js';
 import {
   isBlockedExternalApiHostname,
   isLoopbackApiHost,
@@ -70,6 +73,7 @@ import {
   type ProviderTestRequest,
 } from '@open-design/contracts/api/connectionTest';
 import { googleGenerateContentUrl } from './google-models.js';
+import { resolveAmrProfile } from './integrations/vela.js';
 
 export { validateBaseUrl } from '@open-design/contracts/api/connectionTest';
 
@@ -168,6 +172,27 @@ export async function assertExternalAssetUrl(
     };
   }
   return { ok: true };
+}
+
+/**
+ * Validate an upstream-controlled asset URL and fetch it with the SSRF guard
+ * pinned through redirects. Runs `assertExternalAssetUrl` on the literal URL
+ * and forces `redirect: 'error'`, so a validated public URL that 302s into
+ * loopback / RFC1918 / metadata space is rejected before any bytes are read.
+ *
+ * Throws on a blocked host — so the redirect bypass is impossible to forget at
+ * call sites — and the platform fetch additionally throws when `redirect:
+ * 'error'` encounters a 3xx. Callers keep their own `!resp.ok` HTTP-status
+ * handling. The forced `redirect` is spread last so it overrides any value the
+ * caller passed in `init`.
+ */
+export async function assertAndFetchExternalAsset(
+  url: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const check = await assertExternalAssetUrl(url);
+  if (!check.ok) throw new Error(check.error);
+  return fetch(url, { ...init, redirect: 'error' });
 }
 
 // Aggressive but not punitive — happy paths usually return in under 2 s.
@@ -697,9 +722,11 @@ function inspectProviderCompletion(
   const obj = data && typeof data === 'object' ? data as Record<string, unknown> : null;
   if (!obj) return { valid: false };
 
-  if (protocol === 'openai' || protocol === 'azure' || protocol === 'senseaudio') {
+  if (protocol === 'openai' || protocol === 'azure' || protocol === 'senseaudio' || protocol === 'aihubmix') {
     const responseModel = typeof obj.model === 'string' ? obj.model : '';
     if (
+      // AIHubMix is omitted from the strict response-model check (like Azure):
+      // its gateway routes by model name and may echo a normalized id.
       (protocol === 'openai' || protocol === 'senseaudio') &&
       enforceResponseModel &&
       responseModel &&
@@ -1014,6 +1041,24 @@ function buildProviderCall(input: ProviderTestRequest): ProviderCallShape {
           return '';
         },
       };
+    case 'aihubmix':
+      // AIHubMix is wire-compatible with OpenAI but carries the fixed APP-Code
+      // attribution header on every request (see aihubmixHeaders). Same body /
+      // response shape as the OpenAI case otherwise.
+      return {
+        url: appendVersionedApiPath(baseUrl, '/chat/completions'),
+        headers: {
+          'content-type': 'application/json',
+          ...aihubmixHeaders(apiKey),
+        },
+        body: {
+          model,
+          ...buildOpenAIChatTokenParam(model, PROVIDER_MAX_TOKENS),
+          messages: [{ role: 'user', content: SMOKE_PROMPT }],
+          stream: false,
+        },
+        extractText: extractOpenAIMessageText,
+      };
     case 'openai':
     case 'senseaudio':
       // SenseAudio is wire-compatible with OpenAI (POST /v1/chat/completions,
@@ -1026,6 +1071,10 @@ function buildProviderCall(input: ProviderTestRequest): ProviderCallShape {
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${apiKey}`,
+          ...(new URL(baseUrl).hostname === 'openrouter.ai' ? {
+            'HTTP-Referer': 'https://opendesign.dev',
+            'X-Title': 'Open Design',
+          } : {}),
         },
         body: {
           model,
@@ -1558,6 +1607,8 @@ function attachAgentStreamHandlers(
   prompt: string,
   cwd: string,
   model: string | undefined,
+  modelEnv: Record<string, string | undefined>,
+  liveModelScope: string | null,
   send: (event: string, payload: unknown) => void,
   appendRawStdout?: (chunk: string) => void,
 ): AgentSpawnHandle {
@@ -1598,7 +1649,7 @@ function attachAgentStreamHandlers(
       // concrete fallback id here too, otherwise Test connection deadlocks
       // on the same `session/set_model must be called before session/prompt`
       // error the chat-run path already handles.
-      model: resolveModelForAgent(def as never, model ?? null),
+      model: resolveModelForAgent(def as never, model ?? null, modelEnv, liveModelScope),
       mcpServers: [],
       send,
     });
@@ -1681,6 +1732,7 @@ async function testAgentConnectionInternal(
   let child: AgentChild | null = null;
   let childExit: Promise<AgentChildExit> | null = null;
   let childClosed = false;
+  let promptFile: PreparedPromptFile | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let abortHandler: (() => void) | null = null;
   const sink = createAgentSink();
@@ -1830,12 +1882,16 @@ async function testAgentConnectionInternal(
   try {
     let args: string[];
     try {
+      promptFile = await preparePromptFileForAgent(def, SMOKE_PROMPT, 'connection-test');
       args = def.buildArgs(
         SMOKE_PROMPT,
         [],
         [],
         { model: input.model ?? null, reasoning: input.reasoning ?? null },
-        { cwd: tempDir },
+        {
+          cwd: tempDir,
+          ...(promptFile ? { promptFilePath: promptFile.path } : {}),
+        },
       );
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -1862,9 +1918,25 @@ async function testAgentConnectionInternal(
         ...(def.env || {}),
       },
       configuredAgentEnv,
+      undefined,
+      { resolvedBin: executableResolution.selectedPath },
     );
-    const env = applyAgentLaunchEnv(baseEnv, executableResolution);
-    const auth = await probeAgentAuthStatus(input.agentId, executableResolution.launchPath, env);
+    const liveModelScope = input.agentId === 'amr' ? resolveAmrProfile(baseEnv) : null;
+    const mmdRouteLaunchEnv = input.agentId === 'claude'
+      ? await loadMmdRouteLaunchEnv(
+          {
+            ...process.env,
+            ...(def.env || {}),
+            ...configuredAgentEnv,
+          },
+          model,
+        ).catch(() => null)
+      : null;
+    const env = applyAgentLaunchEnv({
+      ...baseEnv,
+      ...(mmdRouteLaunchEnv || {}),
+    }, executableResolution);
+    const auth = await probeAgentAuthStatus(def, executableResolution.launchPath, env);
     if (auth?.status === 'missing') {
       // Preflight auth probe runs after binary resolution but before the
       // smoke spawn — phase is still 'binary_resolution'. The smoke
@@ -1922,6 +1994,8 @@ async function testAgentConnectionInternal(
       SMOKE_PROMPT,
       tempDir,
       input.model,
+      env,
+      liveModelScope,
       sink.send,
       sink.appendRawStdout,
     );
@@ -2026,6 +2100,7 @@ async function testAgentConnectionInternal(
         stderrTail,
         stdoutTail: rawStdoutTail || buffered,
         env,
+        resolvedBin: executableResolution.selectedPath,
       });
       if (claudeDiagnostic) {
         console.warn(
@@ -2178,6 +2253,9 @@ async function testAgentConnectionInternal(
       .catch(() => {
         // Best-effort cleanup; the OS reaps /tmp eventually.
       });
+    await promptFile?.cleanup().catch(() => {
+      // Best-effort cleanup; the OS reaps /tmp eventually.
+    });
   }
 }
 

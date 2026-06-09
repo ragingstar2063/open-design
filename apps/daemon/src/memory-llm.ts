@@ -60,10 +60,8 @@ import {
   markFailed,
 } from './memory-extractions.js';
 import { resolveProviderConfig } from './media-config.js';
+import { AIHUBMIX_APP_CODE } from './aihubmix.js';
 import { spawn } from 'node:child_process';
-import { promises as fsp } from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { createCommandInvocation } from '@open-design/platform';
 import {
   applyAgentLaunchEnv,
@@ -151,6 +149,13 @@ const PROVIDER_DEFAULTS = {
     model: 'senseaudio-s2-flash',
     baseUrl: 'https://api.senseaudio.cn',
   },
+  // AIHubMix is OpenAI-wire-compatible, so the extractor falls through to
+  // callOpenAI with this base URL and the user's AIHubMix key (plus the fixed
+  // APP-Code header callOpenAI injects). Default to a small/fast model.
+  aihubmix: {
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://aihubmix.com/v1',
+  },
 };
 
 // Map an explicit override provider to the env var the daemon should
@@ -182,6 +187,13 @@ function envKeyFor(provider) {
     return (
       process.env.OD_SENSEAUDIO_API_KEY?.trim()
       || process.env.SENSEAUDIO_API_KEY?.trim()
+      || ''
+    );
+  }
+  if (provider === 'aihubmix') {
+    return (
+      process.env.OD_AIHUBMIX_API_KEY?.trim()
+      || process.env.AIHUBMIX_API_KEY?.trim()
       || ''
     );
   }
@@ -669,6 +681,11 @@ async function callOpenAI(provider, system, user) {
         headers: {
           'content-type': 'application/json',
           authorization: `Bearer ${provider.apiKey}`,
+          // AIHubMix routes through this same OpenAI-compatible path but wants
+          // the fixed APP-Code attribution header on every request.
+          ...(provider.kind === 'aihubmix' && AIHUBMIX_APP_CODE
+            ? { 'APP-Code': AIHUBMIX_APP_CODE }
+            : {}),
         },
         body: JSON.stringify({
           model: provider.model,
@@ -789,16 +806,6 @@ function extractJsonEventText(kind, raw, agentName) {
     .trim();
 }
 
-async function writeLocalCliPromptAttachment(agentId, prompt) {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), `od-memory-${agentId}-`));
-  const file = path.join(dir, 'prompt.md');
-  await fsp.writeFile(file, prompt, 'utf8');
-  return {
-    file,
-    cleanup: () => fsp.rm(dir, { recursive: true, force: true }).catch(() => {}),
-  };
-}
-
 async function callLocalCli(provider, system, user, options) {
   if (typeof options?.localCliRunner === 'function') {
     return options.localCliRunner({
@@ -843,7 +850,6 @@ async function callLocalCli(provider, system, user, options) {
 
   let args;
   let stdinText = prompt;
-  let cleanupPromptAttachment = () => Promise.resolve();
   let parseStdout = (raw) => raw.trim();
   if (provider.agentId === 'claude') {
     args = ['-p', '--input-format', 'text', '--output-format', 'text'];
@@ -860,8 +866,12 @@ async function callLocalCli(provider, system, user, options) {
     );
     parseStdout = (raw) => extractJsonEventText(def.eventParser || def.id, raw, def.name);
   } else if (provider.agentId === 'opencode') {
-    const attachment = await writeLocalCliPromptAttachment(provider.agentId, prompt);
-    cleanupPromptAttachment = attachment.cleanup;
+    // Deliver the prompt on stdin, matching the chat-run path
+    // (def.promptViaStdin). `opencode run`'s `-f, --file` is a yargs array
+    // option that greedily consumes every trailing non-flag token, so
+    // `--file <prompt-file> "<message>"` made OpenCode treat the message
+    // text as a second attachment and exit with "File not found". Bare
+    // `opencode run --format json` reads the message from stdin instead.
     args = def.buildArgs(
       '',
       [],
@@ -869,19 +879,19 @@ async function callLocalCli(provider, system, user, options) {
       { model: provider.model },
       { cwd },
     );
-    args.push(
-      '--file',
-      attachment.file,
-      'Read the attached OpenDesign memory extraction prompt and return strict JSON only.',
-    );
-    stdinText = '';
     parseStdout = (raw) => extractJsonEventText(def.eventParser || def.id, raw, def.name);
   } else {
     throw new Error(`Local CLI memory extraction is not supported for ${provider.agentId}`);
   }
 
   const env = applyAgentLaunchEnv(
-    spawnEnvForAgent(def.id, { ...process.env, ...(def.env || {}) }, configuredAgentEnv),
+    spawnEnvForAgent(
+      def.id,
+      { ...process.env, ...(def.env || {}) },
+      configuredAgentEnv,
+      undefined,
+      { resolvedBin: launch.selectedPath },
+    ),
     launch,
   );
   const invocation = createCommandInvocation({
@@ -907,10 +917,8 @@ async function callLocalCli(provider, system, user, options) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      void cleanupPromptAttachment().finally(() => {
-        if (err) reject(err);
-        else resolve(text);
-      });
+      if (err) reject(err);
+      else resolve(text);
     };
 
     const timeout = setTimeout(() => {

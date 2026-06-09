@@ -6,13 +6,23 @@ import {
   useRef,
   useState,
   useLayoutEffect,
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { createHtmlArtifactManifest, inferLegacyManifest } from '../artifacts/manifest';
 import { resolveHtmlPointerArtifactTarget } from '../artifacts/pointer';
 import { validateHtmlArtifact } from '../artifacts/validate';
+import { recoverHtmlArtifactFromPrecedingDocument, recoverHtmlDocumentFromMarkdownFence, recoverStandaloneHtmlDocument } from '../artifacts/recover';
 import { createArtifactParser } from '../artifacts/parser';
+import {
+  findFirstQuestionForm,
+  hasUnterminatedQuestionForm,
+  parsePartialQuestionForm,
+  type QuestionForm,
+} from '../artifacts/question-form';
+import { parseSubmittedAnswers } from './QuestionForm';
 import { useI18n } from '../i18n';
 import { streamMessage } from '../providers/anthropic';
 import {
@@ -38,6 +48,7 @@ import {
   fetchSkill,
   patchPreviewCommentStatus,
   projectRawUrl,
+  uploadProjectFiles,
   upsertPreviewComment,
   writeProjectTextFile,
 } from '../providers/registry';
@@ -49,14 +60,21 @@ import {
   type MemorySystemPromptResponse,
   type ResearchOptions,
 } from '@open-design/contracts';
-import { projectKindToTracking } from '@open-design/contracts/analytics';
+import {
+  anonymizeArtifactId,
+  artifactKindToTracking,
+  projectKindToTracking,
+} from '@open-design/contracts/analytics';
 import type {
+  TrackingArtifactKind,
   TrackingDesignSystemApplyTargetKind,
   TrackingDesignSystemOrigin,
   TrackingDesignSystemStatusValue,
 } from '@open-design/contracts/analytics';
 import { useAnalytics } from '../analytics/provider';
 import {
+  trackArtifactHeaderClick,
+  trackComposerBarClick,
   trackDesignSystemApplyResult,
   trackPageView,
 } from '../analytics/events';
@@ -74,12 +92,14 @@ import {
 import {
   apiProtocolAgentId,
   apiProtocolModelLabel,
+  usesAnthropicProxy,
 } from '../utils/apiProtocol';
 import { playSound, showCompletionNotification } from '../utils/notifications';
 import { randomUUID } from '../utils/uuid';
 import { DEFAULT_NOTIFICATIONS } from '../state/config';
 import type { TodoItem } from '../runtime/todos';
 import { appendErrorStatusEvent } from '../runtime/chat-events';
+import { RESUME_CONTINUE_PROMPT } from '../runtime/resume';
 import {
   buildDesignSystemPackageAuditRepairPrompt,
   summarizeDesignSystemPackageAudit,
@@ -102,11 +122,13 @@ import {
   patchProject,
   saveMessage,
   startGeneratedPluginShareTask,
-  saveTabs,
+  cacheTabsLocally,
+  persistTabsToDaemonNow,
+  listPlugins,
   type SaveMessageOptions,
   waitGeneratedPluginShareTask,
 } from '../state/projects';
-import type { AppliedPluginSnapshot } from '@open-design/contracts';
+import type { AppliedPluginSnapshot, ChatAnalyticsEntryFrom, ChatSessionMode, InstalledPluginRecord, WorkspaceContextItem } from '@open-design/contracts';
 import type {
   AgentEvent,
   AgentInfo,
@@ -122,6 +144,7 @@ import type {
   Project,
   ProjectMetadata,
   PreviewComment,
+  PreviewCommentAttachment,
   PreviewCommentTarget,
   ProjectFile,
   ProjectTemplate,
@@ -134,28 +157,38 @@ import {
   commentsToAttachments,
   historyWithCommentAttachmentContext,
   mergeAttachedComments,
+  mergePreviewCommentAttachments,
+  queuedSlideNavTarget,
   removeAttachedComment,
 } from '../comments';
+import { filterImplicitProducedFiles } from '../produced-files';
 import { buildPptxExportPrompt } from '../lib/build-pptx-export-prompt';
-import { AppChromeHeader } from './AppChromeHeader';
 import { AvatarMenu } from './AvatarMenu';
+import { EntrySettingsMenu } from './EntrySettingsMenu';
 import { HandoffButton } from './HandoffButton';
-import { ProjectDesignSystemPicker } from './ProjectDesignSystemPicker';
+import { Icon } from './Icon';
+import { DesignSystemPicker } from './DesignSystemPicker';
+import { PluginDetailsModal } from './PluginDetailsModal';
+import { DesignSystemPreviewModal } from './DesignSystemPreviewModal';
 import { ChatPane } from './ChatPane';
+import type { QuestionFormOpenRequest } from './AssistantMessage';
 import type { ChatSendMeta } from './ChatComposer';
 import {
   CritiqueTheaterMount,
   useCritiqueTheaterEnabled,
 } from './Theater';
 import { useIframeKeepAlivePool } from './IframeKeepAlivePool';
-import { decideAutoOpenAfterWrite } from './auto-open-file';
+import {
+  decideAutoOpenAfterWrite,
+  selectAutoOpenProducedHtml,
+} from './auto-open-file';
 import { buildRepoImportPrompt, designSystemNeedsRepoConnect } from './design-system-github-evidence';
 import { collectReferencedJsxNames } from '../runtime/jsx-module-refs';
 import { FileWorkspace } from './FileWorkspace';
-import { Icon } from './Icon';
 import {
   type PluginFolderAgentAction,
 } from './design-files/pluginFolderActions';
+import { SHARE_TO_COMMUNITY_PROMPT } from './share-to-community/shareToCommunityPrompt';
 import { CenteredLoader } from './Loading';
 import type { SettingsSection } from './SettingsDialog';
 import { Toast } from './Toast';
@@ -168,6 +201,13 @@ import { buildClipboardPrompt } from '../lib/build-clipboard-prompt';
 import { copyToClipboard } from '../lib/copy-to-clipboard';
 import { effectiveMaxTokens } from '../state/maxTokens';
 import { effectiveAgentModelChoice } from './agentModelSelection';
+import { mediaExecutionPolicyForProjectMetadata } from '../media/execution-policy';
+import { mediaModelProviderId } from '../media/models';
+import {
+  useByokImageModelOptions,
+  useByokVideoModelOptions,
+  useByokSpeechModelOptions,
+} from '../media/aihubmix-image-models';
 import {
   buildFinalizeCredentialsMissingToast,
   buildFinalizeRequest,
@@ -175,8 +215,20 @@ import {
 
 
 type ProjectChatSendMeta = ChatSendMeta & {
+  queueOnly?: boolean;
   retryOfAssistantId?: string;
+  sessionMode?: ChatSessionMode;
+  /** Overrides the run_created / run_finished `entry_from` analytics prop for
+   *  this send (e.g. 'resume_continue' from the resumable-failure Continue
+   *  action). Behavior never depends on it; it only shapes PostHog props. */
+  entryFrom?: ChatAnalyticsEntryFrom;
 };
+
+export function mergeSavedPreviewComment(current: PreviewComment[], saved: PreviewComment): PreviewComment[] {
+  const existingIndex = current.findIndex((comment) => comment.id === saved.id);
+  if (existingIndex < 0) return [...current, saved];
+  return current.map((comment, index) => (index === existingIndex ? saved : comment));
+}
 
 interface Props {
   project: Project;
@@ -215,9 +267,12 @@ interface Props {
     choice: { model?: string; reasoning?: string },
   ) => void;
   onRefreshAgents: () => void;
+  onThemeChange?: (theme: AppConfig['theme']) => void;
   onOpenSettings: (section?: SettingsSection) => void;
   onOpenAmrSettings?: () => void;
   onOpenMcpSettings?: () => void;
+  onBrowsePlugins?: () => void;
+  onOpenConnectors?: () => void;
   // Pet wiring forwarded to the chat composer so users can adopt /
   // wake / tuck a pet without leaving the project view.
   onAdoptPetInline?: (petId: string) => void;
@@ -242,15 +297,27 @@ interface QueuedChatSend {
   createdAt: number;
 }
 
+interface QueuedChatSendUpdate {
+  prompt: string;
+  attachments: ChatAttachment[];
+  commentAttachments: ChatCommentAttachment[];
+  meta?: ChatSendMeta;
+}
+
 let liveArtifactEventSequence = 0;
 const CHAT_PANEL_WIDTH_STORAGE_KEY = 'open-design.project.chatPanelWidth';
 const DEFAULT_CHAT_PANEL_WIDTH = 460;
 const MIN_CHAT_PANEL_WIDTH = 345;
 const MAX_CHAT_PANEL_WIDTH = 720;
+const COMMENT_INSPECTOR_PANEL_WIDTH = 320;
 const MIN_WORKSPACE_PANEL_WIDTH = 400;
 const SPLIT_RESIZE_HANDLE_WIDTH = 8;
 const CHAT_PANEL_KEYBOARD_STEP = 16;
 const DESIGN_SYSTEM_AUDIT_AUTO_REPAIR_ATTEMPTS = 2;
+// Trailing-debounce window for the canonical (daemon + SQLite) tab-state write.
+// Embedded-browser navigation bursts settle well within this; the local cache
+// is written immediately so nothing is lost if the daemon write is coalesced.
+const TAB_PERSIST_DEBOUNCE_MS = 400;
 const MIN_NORMAL_SPLIT_WIDTH =
   MIN_CHAT_PANEL_WIDTH + SPLIT_RESIZE_HANDLE_WIDTH + MIN_WORKSPACE_PANEL_WIDTH;
 type DesignSystemReviewEntry = NonNullable<ProjectMetadata['designSystemReview']>[string];
@@ -298,6 +365,82 @@ function designSystemFeedbackAttachments(
       kind: file.kind === 'image' ? 'image' : 'file',
       size: file.size,
     }));
+}
+
+function chatAttachmentsFromPreviewCommentImages(
+  images: PreviewCommentAttachment[] | undefined,
+): ChatAttachment[] {
+  if (!Array.isArray(images)) return [];
+  const seen = new Set<string>();
+  const out: ChatAttachment[] = [];
+  for (const image of images) {
+    const path = image.path.trim();
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    out.push({
+      path,
+      name: image.name.trim() || path.split('/').pop() || path,
+      kind: 'image',
+    });
+  }
+  return out;
+}
+
+function mergeChatAttachments(...groups: ChatAttachment[][]): ChatAttachment[] {
+  const seen = new Set<string>();
+  const out: ChatAttachment[] = [];
+  for (const group of groups) {
+    for (const attachment of group) {
+      const path = attachment.path.trim();
+      if (!path || seen.has(path)) continue;
+      seen.add(path);
+      out.push({ ...attachment, path });
+    }
+  }
+  return out;
+}
+
+function historyWithWorkspaceContext(
+  history: ChatMessage[],
+  messageId: string,
+  context: ChatSendMeta['context'] | undefined,
+): ChatMessage[] {
+  const items = context?.workspaceItems ?? [];
+  if (items.length === 0) return history;
+  const block = [
+    '',
+    '',
+    '<active-workspace-context>',
+    'Open Design selected the currently focused workspace tab as the default context for this turn.',
+    ...items.map((item, index) => {
+      const details = [
+        item.path ? `path: ${item.path}` : null,
+        item.absolutePath ? `absolute: ${item.absolutePath}` : null,
+        item.url ? `url: ${item.url}` : null,
+        item.title ? `title: ${item.title}` : null,
+        item.tabId ? `tab: ${item.tabId}` : null,
+      ].filter(Boolean).join(' | ');
+      return `${index + 1}. ${item.kind}: ${item.label}${details ? ` | ${details}` : ''}`;
+    }),
+    '</active-workspace-context>',
+  ].join('\n');
+  return history.map((message) =>
+    message.id === messageId && message.role === 'user'
+      ? { ...message, content: `${message.content}${block}` }
+      : message,
+  );
+}
+
+function commentTaskQuery(attachment: ChatCommentAttachment): string {
+  return (attachment.comment ?? '').trim();
+}
+
+function commentTaskContextAttachment(attachment: ChatCommentAttachment): ChatCommentAttachment {
+  return {
+    ...attachment,
+    comment: '',
+    commentContext: 'query',
+  };
 }
 
 function designSystemNeedsWorkPrompt(
@@ -434,8 +577,36 @@ function isStoredChatAttachment(value: unknown): value is ChatAttachment {
     typeof record.name === 'string' &&
     record.name.length > 0 &&
     (record.kind === 'image' || record.kind === 'file') &&
-    (record.size === undefined || typeof record.size === 'number')
+    (record.size === undefined || typeof record.size === 'number') &&
+    (record.order === undefined || typeof record.order === 'number')
   );
+}
+
+function workspaceContextItemEqual(
+  a: WorkspaceContextItem | null,
+  b: WorkspaceContextItem | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.id === b.id &&
+    a.kind === b.kind &&
+    a.label === b.label &&
+    (a.tabId ?? '') === (b.tabId ?? '') &&
+    (a.path ?? '') === (b.path ?? '') &&
+    (a.absolutePath ?? '') === (b.absolutePath ?? '') &&
+    (a.url ?? '') === (b.url ?? '') &&
+    (a.title ?? '') === (b.title ?? '')
+  );
+}
+
+function workspaceContextItemsEqual(
+  a: WorkspaceContextItem[],
+  b: WorkspaceContextItem[],
+): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => workspaceContextItemEqual(item, b[index] ?? null));
 }
 
 function appendLiveArtifactEventItem(
@@ -451,12 +622,111 @@ export function projectSplitClassName(workspaceFocused: boolean): string {
   return workspaceFocused ? 'split split-focus' : 'split';
 }
 
+// React key for the on-screen question form. Deliberately does NOT include the
+// form's parsed `id`: there is at most one (first) form per assistant message,
+// so `${conversation}:${message}` is already a stable, unique identity for the
+// occurrence. Folding the parsed id in would remount the panel mid-stream — the
+// preview shows the `discovery` fallback until the body `id` streams in, and a
+// form that emits answerable questions before its `id` would flip identity
+// while the user is mid-answer, dropping their selections. A distinct later
+// form lives in a different assistant message, so it still gets its own key
+// (and replays the reveal) without relying on the id.
+export function buildQuestionFormKey(
+  conversationId: string | null,
+  assistantMessageId: string | null,
+  hasForm: boolean,
+): string | null {
+  return conversationId && assistantMessageId && hasForm
+    ? `${conversationId}:${assistantMessageId}`
+    : null;
+}
+
+type ProjectSplitStyle = CSSProperties & {
+  '--project-chat-panel-width': string;
+  '--project-workspace-panel-track': string;
+};
+
+export function projectSplitStyle(
+  workspaceFocused: boolean,
+  chatPanelWidth: number,
+  workspacePanelTrack: string,
+): ProjectSplitStyle | undefined {
+  if (workspaceFocused) return undefined;
+  return {
+    '--project-chat-panel-width': `${chatPanelWidth}px`,
+    '--project-workspace-panel-track': workspacePanelTrack,
+    gridTemplateColumns: `${chatPanelWidth}px ${SPLIT_RESIZE_HANDLE_WIDTH}px ${workspacePanelTrack}`,
+  };
+}
+
+function applySplitChatPanelWidth(
+  split: HTMLDivElement | null,
+  width: number,
+  workspacePanelTrack: string,
+): void {
+  if (!split) return;
+  split.style.setProperty('--project-chat-panel-width', `${width}px`);
+  split.style.gridTemplateColumns =
+    `${width}px ${SPLIT_RESIZE_HANDLE_WIDTH}px ${workspacePanelTrack}`;
+}
+
 function shouldFetchElevenLabsVoiceOptions(project: Project): boolean {
   const metadata = project.metadata;
   return metadata?.kind === 'audio'
     && metadata.audioKind === 'speech'
     && metadata.audioModel === 'elevenlabs-v3'
     && !metadata.voice;
+}
+
+// The media model the user picked in the New Project → Media dialog, keyed by
+// surface. For BYOK providers (AIHubMix) media is produced by the generate_*
+// chat tools whose default model comes from the per-request byok*Model field —
+// NOT the `od media generate` dispatcher — so without this seed the dialog pick
+// is dropped and the conversation falls back to the Settings default. Returns
+// undefined for non-media projects (and when the field is empty) so callers fall
+// back to the Settings default exactly as before. The daemon re-validates the id
+// against the active provider's registry, so a mismatched pick is safely ignored.
+function projectMediaModelSeed(
+  metadata: ProjectMetadata | null | undefined,
+  surface: 'image' | 'video' | 'speech',
+): string | undefined {
+  if (!metadata) return undefined;
+  if (surface === 'image' && metadata.kind === 'image') {
+    return metadata.imageModel?.trim() || undefined;
+  }
+  if (surface === 'video' && metadata.kind === 'video') {
+    return metadata.videoModel?.trim() || undefined;
+  }
+  if (surface === 'speech' && metadata.kind === 'audio' && metadata.audioKind === 'speech') {
+    return metadata.audioModel?.trim() || undefined;
+  }
+  return undefined;
+}
+
+function projectMediaVoiceSeed(
+  metadata: ProjectMetadata | null | undefined,
+): string | undefined {
+  if (metadata?.kind === 'audio' && metadata.audioKind === 'speech') {
+    return metadata.voice?.trim() || undefined;
+  }
+  return undefined;
+}
+
+// Carry the creation-time model pick into the conversation ONLY when it belongs
+// to the active BYOK provider. Guards against clobbering a user's Settings
+// default with a model from a different provider — e.g. a SenseAudio user whose
+// image project was created with the dialog's default `gpt-image-2` keeps their
+// configured SenseAudio model instead of being forced to the registry default.
+// AIHubMix's live (`aihubmix-` prefixed) ids resolve via mediaModelProviderId
+// without waiting on the async catalogue, so the AIHubMix path still seeds.
+function byokModelSeedForProtocol(
+  metadata: ProjectMetadata | null | undefined,
+  surface: 'image' | 'video' | 'speech',
+  protocol: string | undefined,
+): string | undefined {
+  const picked = projectMediaModelSeed(metadata, surface);
+  if (!picked) return undefined;
+  return mediaModelProviderId(picked) === protocol ? picked : undefined;
 }
 
 function projectEventToAgentEvent(evt: ProjectEvent): LiveArtifactEventItem['event'] | null {
@@ -498,9 +768,12 @@ export function ProjectView({
   onAgentChange,
   onAgentModelChange,
   onRefreshAgents,
+  onThemeChange,
   onOpenSettings,
   onOpenAmrSettings,
   onOpenMcpSettings,
+  onBrowsePlugins,
+  onOpenConnectors,
   onAdoptPetInline,
   onTogglePet,
   onOpenPetSettings,
@@ -515,6 +788,7 @@ export function ProjectView({
   const { locale, t } = useI18n();
   const analytics = useAnalytics();
   const iframeKeepAlivePool = useIframeKeepAlivePool();
+  const handleThemeChange = onThemeChange ?? (() => {});
   // P0 page_view page_name=chat_panel — fire once per project mount.
   // ProjectView outlives conversation switches (ChatPane is keyed by
   // activeConversationId so it remounts when the user switches chats,
@@ -553,14 +827,29 @@ export function ProjectView({
   const [activeConversationId, setActiveConversationId] = useState<string | null>(
     null,
   );
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId) ?? null,
+    [conversations, activeConversationId],
+  );
+  const activeSessionMode = activeConversation?.sessionMode ?? 'design';
   const [messagesConversationId, setMessagesConversationId] = useState<string | null>(null);
   const [failedMessagesConversationId, setFailedMessagesConversationId] = useState<string | null>(null);
   const [conversationLoadError, setConversationLoadError] = useState<string | null>(null);
   const [messageLoadRetryNonce, setMessageLoadRetryNonce] = useState(0);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [forkingMessageId, setForkingMessageId] = useState<string | null>(null);
   const [activePluginActionPaths, setActivePluginActionPaths] = useState<Set<string>>(() => new Set());
   const [hiddenAssistantPluginActionPaths, setHiddenAssistantPluginActionPaths] = useState<Set<string>>(() => new Set());
   const [forceStreamingPluginMessageIds, setForceStreamingPluginMessageIds] = useState<Set<string>>(() => new Set());
+  // Ephemeral, live-only accumulation of a tool call's streaming JSON input,
+  // keyed by tool-use id (globally unique per run). Fed by `onToolInputDelta`
+  // while the model is still emitting `input_json_delta`; dropped per-id once
+  // the full `tool_use` lands and wiped when the run ends. Never persisted —
+  // see daemon `daemonAgentPayloadToPersistedAgentEvent` (returns null).
+  // `seq` records how many persisted events existed when the tool started
+  // streaming, so the renderer can place the live card at the tool call's
+  // position in the message (text before it = preamble, after it = hedging).
+  const [liveToolInput, setLiveToolInput] = useState<Record<string, { name: string; text: string; seq: number }>>({});
   // True once the initial DB read for the active conversation has settled.
   // Auto-send gates on this so it can't fire before listMessages resolves and
   // race-clobber the freshly-pushed user + assistant placeholder. Without
@@ -570,13 +859,27 @@ export function ProjectView({
   // attach the runId to.
   const [messagesInitialized, setMessagesInitialized] = useState(false);
   const [previewComments, setPreviewComments] = useState<PreviewComment[]>([]);
+  // Mirror so the send-now interrupt path can read the current statuses
+  // synchronously without re-creating its callback on every comment change.
+  const previewCommentsRef = useRef<PreviewComment[]>([]);
+  useEffect(() => {
+    previewCommentsRef.current = previewComments;
+  }, [previewComments]);
   const [attachedComments, setAttachedComments] = useState<PreviewComment[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [streamingConversationId, setStreamingConversationId] = useState<string | null>(null);
+  // Safety net: drop any live tool-input partials whose tool never produced a
+  // full `tool_use` (run errored/canceled mid-call) once streaming settles.
+  useEffect(() => {
+    if (!streaming) setLiveToolInput((prev) => (Object.keys(prev).length ? {} : prev));
+  }, [streaming]);
   const [error, setError] = useState<string | null>(null);
   const [audioVoiceOptionsError, setAudioVoiceOptionsError] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [filesRefresh, setFilesRefresh] = useState(0);
+  // True while a working-dir replace is reindexing the new folder. Surfaced
+  // to the Design Files panel so the file list shows a loading state instead
+  // of silently sitting on the old tree for the few seconds the scan takes.
   const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
   const projectFilesRef = useRef<ProjectFile[]>([]);
   const [liveArtifacts, setLiveArtifacts] = useState<LiveArtifactSummary[]>([]);
@@ -585,32 +888,40 @@ export function ProjectView({
   const [commentInspectorActive, setCommentInspectorActive] = useState(false);
   const commentInspectorPortalId = useId();
   const leftInspectorActive = commentInspectorActive;
-  // Per-session override for the BYOK SenseAudio chat's generate_image
-  // tool. Seeded once from Settings (config.byokImageModel) so the
-  // composer dropdown opens on the user's chosen default; subsequent
-  // selections live only in this component's state — page refresh /
-  // project switch resets to the Settings default. Persistent defaults
-  // live in Settings → BYOK → SenseAudio → Image generation model.
+  // Per-session override for the BYOK chat's generate_image tool. Seeded once
+  // from the New Project → Media model pick (project.metadata.imageModel) — but
+  // only when that pick belongs to the active BYOK provider (see
+  // byokModelSeedForProtocol) — falling back to the Settings default
+  // (config.byokImageModel) otherwise. Subsequent selections live only in this
+  // component's state — page refresh / project switch resets to this seed.
+  // Persistent defaults live in Settings → BYOK → Image generation model.
   const [byokImageModelOverride, setByokImageModelOverride] = useState<string>(
-    config.byokImageModel ?? '',
+    () => byokModelSeedForProtocol(project.metadata, 'image', config.apiProtocol) ?? config.byokImageModel ?? '',
   );
-  // `closed` → no surface; `review` → read-only saved-state panel with a
-  // preview + reopen-to-edit action (#1822); `edit` → the textarea editor.
-  const [instructionsMode, setInstructionsMode] = useState<'closed' | 'review' | 'edit'>('closed');
-  const [instructionsDraft, setInstructionsDraft] = useState(project.customInstructions ?? '');
-  const [instructionsSaving, setInstructionsSaving] = useState(false);
-  // Keep the draft in sync with the server value while the editor is not
-  // open (e.g. after an external update or project switch). If the saved
-  // value disappears while the review panel is showing, collapse the
-  // surface so it never renders a stale or empty read-back.
-  useEffect(() => {
-    if (instructionsMode === 'edit') return;
-    setInstructionsDraft(project.customInstructions ?? '');
-    if (instructionsMode === 'review' && !(project.customInstructions ?? '').trim()) {
-      setInstructionsMode('closed');
-    }
-  }, [project.customInstructions, instructionsMode]);
-
+  // Same per-session override for the BYOK chat's generate_video tool, seeded
+  // from the project's videoModel pick (provider-gated), then Settings.
+  const [byokVideoModelOverride, setByokVideoModelOverride] = useState<string>(
+    () => byokModelSeedForProtocol(project.metadata, 'video', config.apiProtocol) ?? config.byokVideoModel ?? '',
+  );
+  // Same per-session overrides for the BYOK chat's generate_speech tool (model +
+  // voice), seeded from the project's speech pick (provider-gated), then Settings.
+  const [byokSpeechModelOverride, setByokSpeechModelOverride] = useState<string>(
+    () => byokModelSeedForProtocol(project.metadata, 'speech', config.apiProtocol) ?? config.byokSpeechModel ?? '',
+  );
+  // Voice only carries when the speech model itself is carried (same provider),
+  // so a cross-provider voice id never leaks into the request.
+  const [byokSpeechVoiceOverride, setByokSpeechVoiceOverride] = useState<string>(
+    () => (byokModelSeedForProtocol(project.metadata, 'speech', config.apiProtocol)
+      ? projectMediaVoiceSeed(project.metadata)
+      : undefined) ?? config.byokSpeechVoice ?? '',
+  );
+  // Live model option lists (same hooks the composer/Settings pickers use) so
+  // the chat "default" (no explicit pick) resolves to the FIRST catalogue model
+  // shown in the dropdown — not a hardcoded id. The daemon keeps its own
+  // fallback for when the catalogue hasn't loaded.
+  const byokImageModelOptionsPV = useByokImageModelOptions(config.apiProtocol);
+  const byokVideoModelOptionsPV = useByokVideoModelOptions(config.apiProtocol);
+  const byokSpeechModelOptionsPV = useByokSpeechModelOptions(config.apiProtocol);
   // PR #974 round 7 (mrcfps @ useDesignMdState.ts:131): counter that
   // bumps on file-changed SSE events, live_artifact* events, and the
   // chat streaming-completion edge so the staleness chip stays in sync
@@ -657,6 +968,30 @@ export function ProjectView({
     tabs: [],
     active: null,
   });
+  // Artifact context for the header actions (settings gear, handoff) that live
+  // in this workspace's header alongside FileViewer's present/share/download.
+  // Mirrors the artifact_id / artifact_kind that FileViewer attaches, derived
+  // from the currently-active file tab, so all artifact_header analytics carry
+  // the same dimensions. Undefined on non-file tabs (e.g. the file list).
+  const headerArtifact = useMemo<{
+    artifact_id?: string;
+    artifact_kind?: TrackingArtifactKind;
+  }>(() => {
+    const activeName = openTabsState.active;
+    const file = activeName
+      ? projectFiles.find((entry) => entry.name === activeName) ?? null
+      : null;
+    if (!file) return {};
+    return {
+      artifact_id: anonymizeArtifactId({ projectId: project.id, fileName: file.name }),
+      artifact_kind: artifactKindToTracking({ fileKind: file.kind ?? null }),
+    };
+  }, [openTabsState.active, projectFiles, project.id]);
+  const routeFileNameRef = useRef(routeFileName);
+  routeFileNameRef.current = routeFileName;
+  const [activeWorkspaceContext, setActiveWorkspaceContext] =
+    useState<WorkspaceContextItem | null>(null);
+  const [workspaceContexts, setWorkspaceContexts] = useState<WorkspaceContextItem[]>([]);
   const tabsLoadedRef = useRef(false);
   const tabsHydratedFromSavedStateRef = useRef(false);
   const hasAppliedInitialPrimaryOpenRef = useRef(false);
@@ -665,8 +1000,27 @@ export function ProjectView({
   // include a nonce so re-clicking the same name after the user closed the
   // tab still focuses it.
   const [openRequest, setOpenRequest] = useState<{ name: string; nonce: number } | null>(null);
+  // Like `openRequest`, but additionally asks the preview workspace to open the
+  // file's Share/Export menu. Drives the "Share" next-step action: it reuses the
+  // existing export/deploy surface rather than introducing a new share backend.
+  const [shareRequest, setShareRequest] = useState<{ name: string; nonce: number } | null>(null);
+  // When a queued chat send starts processing, ask the workspace to flip the
+  // deck preview to the slide its marked element lives on, so the user watches
+  // the edit land in context instead of staying parked on slide 1. Mirrors the
+  // `shareRequest` nonce signal: FileWorkspace matches `name` against the open
+  // file and FileViewer consumes each nonce once.
+  const [slideNavRequest, setSlideNavRequest] = useState<
+    { name: string; slideIndex: number; nonce: number } | null
+  >(null);
   const abortRef = useRef<AbortController | null>(null);
   const cancelRef = useRef<AbortController | null>(null);
+  // Runs explicitly superseded by a "send now" interrupt. Their abort
+  // controller is recorded here synchronously — before handleStop() clears the
+  // active refs — so the run's late terminal callbacks (which the daemon still
+  // delivers for a canceled run) can be recognized as stale and skip every
+  // current-run side effect, independent of abortRef churn. A WeakSet so a
+  // finished run's controller is collected once nothing else references it.
+  const supersededRunsRef = useRef<WeakSet<AbortController>>(new WeakSet());
   const streamingConversationIdRef = useRef<string | null>(null);
   const [queuedChatSends, setQueuedChatSends] = useState<QueuedChatSend[]>([]);
   const queuedChatSendsRef = useRef<QueuedChatSend[]>([]);
@@ -675,6 +1029,8 @@ export function ProjectView({
   const reattachControllersRef = useRef<Map<string, AbortController>>(new Map());
   const reattachCancelControllersRef = useRef<Map<string, AbortController>>(new Map());
   const completedReattachRunsRef = useRef<Set<string>>(new Set());
+  const startingQueuedChatSendIdRef = useRef<string | null>(null);
+  const [queuedAutoStartTick, setQueuedAutoStartTick] = useState(0);
   const skillCache = useRef<Map<string, string>>(new Map());
   const designCache = useRef<Map<string, string>>(new Map());
   const templateCache = useRef<Map<string, ProjectTemplate>>(new Map());
@@ -708,8 +1064,9 @@ export function ProjectView({
   useEffect(() => {
     setChatSeed(null);
     setAutoAuditRepairSeed(null);
-    queuedChatSendsRef.current = [];
-    setQueuedChatSends([]);
+    const restored = loadQueuedChatSends(project.id);
+    queuedChatSendsRef.current = restored;
+    setQueuedChatSends(restored);
   }, [project.id]);
   // Monotonic token bumped on every `conversation-created` refresh dispatch.
   // Two rapid events (e.g. concurrent routine runs against the same reused
@@ -741,15 +1098,149 @@ export function ProjectView({
     || failedMessagesConversationId === activeConversationId
     || currentConversationAwaitingActiveRunAttach;
   const currentConversationActionDisabled = currentConversationBusy || currentConversationSendDisabled;
+  const currentConversationQueueDisabled = currentConversationLoading
+    || failedMessagesConversationId === activeConversationId;
+
+  // The discovery question form lives in the right-hand Questions tab. We
+  // derive it from the latest assistant message: if that message embeds a
+  // <question-form> block, the panel renders it. The form is interactive
+  // only while it's the most recent turn and the user hasn't answered yet
+  // (an answer arrives as a following "[form answers …]" user message).
+  const lastAssistantIndex = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i]?.role === 'assistant') return i;
+    }
+    return -1;
+  }, [messages]);
+  const lastAssistantContent =
+    lastAssistantIndex >= 0 ? messages[lastAssistantIndex]?.content ?? '' : '';
+  const lastAssistantMessageId =
+    lastAssistantIndex >= 0 ? messages[lastAssistantIndex]?.id ?? null : null;
+  const questionForm: QuestionForm | null = useMemo(
+    () => findFirstQuestionForm(lastAssistantContent)?.form ?? null,
+    [lastAssistantContent],
+  );
+  const questionFormSubmittedAnswers = useMemo(() => {
+    if (!questionForm) return undefined;
+    for (let i = lastAssistantIndex + 1; i < messages.length; i++) {
+      const m = messages[i];
+      if (m?.role !== 'user') continue;
+      const parsed = parseSubmittedAnswers(questionForm, m.content ?? '');
+      if (parsed) return parsed;
+    }
+    return undefined;
+  }, [questionForm, lastAssistantIndex, messages]);
+  const questionsGenerating =
+    currentConversationStreaming && hasUnterminatedQuestionForm(lastAssistantContent);
+  // While the form is still streaming, parse it tolerantly so the Questions tab
+  // can show a frame (title) immediately and fill questions in as they arrive.
+  const questionFormPreview = useMemo(
+    () => (questionsGenerating ? parsePartialQuestionForm(lastAssistantContent) : null),
+    [questionsGenerating, lastAssistantContent],
+  );
+  // The active (latest, unanswered) form stays editable the whole time it's on
+  // screen — while it streams in AND while the turn is still busy — so it never
+  // flickers between the locked (grey) and interactive (accent) styles.
+  // Submission is gated separately by the panel via `submitDisabled`/generating.
+  const questionFormActive =
+    (!!questionForm || questionsGenerating) && questionFormSubmittedAnswers === undefined;
+  // Mirror `questionFormActive`'s unanswered gate: once the user answers, the
+  // Questions tab closes, so the auto-focus nonce must not treat an answered
+  // form as a freshly appeared one.
+  const hasQuestions =
+    Boolean(questionForm || questionsGenerating) && questionFormSubmittedAnswers === undefined;
+  // Stable identity for the current form occurrence, used to remember that its
+  // one-by-one reveal already played. Keyed on the conversation + the hosting
+  // assistant message id (not the message index, and NOT the parsed form id —
+  // see buildQuestionFormKey). The assistant message id is allocated once and
+  // kept in place across the streaming→persisted swap (same `assistantId`
+  // throughout), so it survives the brief unmount/re-focus of the Questions tab
+  // without replaying the animation, yet differs for every distinct form
+  // occurrence (each lives in its own assistant message).
+  const questionFormKey = useMemo(
+    () =>
+      buildQuestionFormKey(
+        activeConversationId,
+        lastAssistantMessageId,
+        Boolean(questionForm ?? questionFormPreview),
+      ),
+    [activeConversationId, lastAssistantMessageId, questionForm, questionFormPreview],
+  );
+
+  // Release #3661: let a past question form be manually re-opened in the
+  // Questions panel. Layered on top of main's stable questionFormKey (#3644) —
+  // the `displayed*` values fall back to the live form when nothing is manually
+  // pinned, so both fixes coexist.
+  const [manualQuestionFormRequest, setManualQuestionFormRequest] =
+    useState<QuestionFormOpenRequest | null>(null);
+  useEffect(() => {
+    setManualQuestionFormRequest(null);
+  }, [project.id, activeConversationId]);
+  useEffect(() => {
+    if (hasQuestions && questionFormKey) setManualQuestionFormRequest(null);
+  }, [hasQuestions, questionFormKey]);
+  const displayedQuestionForm = manualQuestionFormRequest?.form ?? questionForm;
+  const displayedQuestionFormPreview = manualQuestionFormRequest ? null : questionFormPreview;
+  const displayedQuestionFormSubmittedAnswers =
+    manualQuestionFormRequest?.submittedAnswers ?? questionFormSubmittedAnswers;
+  const displayedQuestionFormActive = manualQuestionFormRequest ? false : questionFormActive;
+  const displayedQuestionsGenerating = manualQuestionFormRequest ? false : questionsGenerating;
+  const displayedQuestionFormKey = manualQuestionFormRequest
+    ? `${activeConversationId ?? 'conversation'}:${manualQuestionFormRequest.messageId}:${manualQuestionFormRequest.form.id}:manual`
+    : questionFormKey;
+
+  // Auto-switch the workspace to the Questions tab when a new discovery form
+  // first appears, and let the chat banner re-focus it on click. The nonce
+  // bump is what FileWorkspace listens to.
+  const [questionsFocusNonce, setQuestionsFocusNonce] = useState(0);
+  const prevHasQuestionsRef = useRef(false);
+  useEffect(() => {
+    if (hasQuestions && !prevHasQuestionsRef.current) {
+      setQuestionsFocusNonce((n) => n + 1);
+    }
+    prevHasQuestionsRef.current = hasQuestions;
+  }, [hasQuestions]);
+  const focusQuestionsRequest = useMemo(
+    () => (questionsFocusNonce > 0 ? { nonce: questionsFocusNonce } : null),
+    [questionsFocusNonce],
+  );
+  const submittedAnswersForQuestionFormRequest = useCallback((request: QuestionFormOpenRequest) => {
+    const assistantIndex = messages.findIndex((m) => m.id === request.messageId);
+    if (assistantIndex < 0) return null;
+    for (let i = assistantIndex + 1; i < messages.length; i++) {
+      const m = messages[i];
+      if (!m) continue;
+      if (m.role === 'assistant') break;
+      if (m.role !== 'user') continue;
+      const parsed = parseSubmittedAnswers(request.form, m.content ?? '');
+      if (parsed) return parsed;
+    }
+    return null;
+  }, [messages]);
+  const openQuestionsTab = useCallback((request?: QuestionFormOpenRequest) => {
+    if (request) {
+      setManualQuestionFormRequest({
+        ...request,
+        submittedAnswers:
+          request.submittedAnswers ?? submittedAnswersForQuestionFormRequest(request) ?? undefined,
+      });
+    }
+    setQuestionsFocusNonce((n) => n + 1);
+  }, [submittedAnswersForQuestionFormRequest]);
+
   const currentConversationQueuedItems = activeConversationId
     ? queuedChatSends
         .filter((item) => item.conversationId === activeConversationId)
-        .map((item) => ({
-          id: item.id,
-          prompt: item.prompt,
-          attachments: item.attachments,
-          commentAttachments: item.commentAttachments,
-        }))
+        .map((item) => {
+          const queuedItem = {
+            id: item.id,
+            prompt: item.prompt,
+            attachments: item.attachments,
+            commentAttachments: item.commentAttachments,
+          };
+          if (item.meta === undefined) return queuedItem;
+          return { ...queuedItem, meta: item.meta };
+        })
     : [];
   const newConversationDisabled = creatingConversation;
   const activeCompletionNotificationRunsRef = useRef<Set<string>>(new Set());
@@ -1036,11 +1527,26 @@ export function ProjectView({
     tabsLoadedRef.current = false;
     tabsHydratedFromSavedStateRef.current = false;
     hasAppliedInitialPrimaryOpenRef.current = false;
+    setOpenTabsState({ tabs: [], active: null });
     (async () => {
       const state = await loadTabs(project.id);
       if (cancelled) return;
+      const routeActive = routeFileNameRef.current;
+      let nextState = routeActive
+        ? {
+            ...state,
+            tabs: state.tabs.includes(routeActive)
+              ? state.tabs
+              : [...state.tabs, routeActive],
+            active: routeActive,
+          }
+        : state;
+      if (routeActive) {
+        nextState = cacheTabsLocally(project.id, nextState);
+        void persistTabsToDaemonNow(project.id, nextState);
+      }
       tabsHydratedFromSavedStateRef.current = state.hasSavedState === true;
-      setOpenTabsState(state);
+      setOpenTabsState(nextState);
       tabsLoadedRef.current = true;
     })();
     return () => {
@@ -1048,15 +1554,59 @@ export function ProjectView({
     };
   }, [project.id]);
 
+  // Debounce the canonical (daemon + SQLite) tab-state write. The embedded
+  // browser fans out url/title/favicon updates in bursts on a single page load
+  // (did-navigate, did-navigate-in-page, page-title-updated, favicon), and each
+  // used to be a localStorage write + HTTP PUT + SQLite UPDATE + re-render.
+  // We keep React state and the local cache IMMEDIATE (so the UI and a reload
+  // are never stale) and coalesce only the daemon PUT.
+  const tabsDaemonSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDaemonTabsRef = useRef<OpenTabsState | null>(null);
+  const flushTabsDaemonSave = useCallback(() => {
+    if (tabsDaemonSaveTimerRef.current != null) {
+      clearTimeout(tabsDaemonSaveTimerRef.current);
+      tabsDaemonSaveTimerRef.current = null;
+    }
+    const pending = pendingDaemonTabsRef.current;
+    pendingDaemonTabsRef.current = null;
+    if (pending) void persistTabsToDaemonNow(project.id, pending);
+  }, [project.id]);
+
   const persistTabsState = useCallback(
     (next: OpenTabsState) => {
       setOpenTabsState(next);
-      if (tabsLoadedRef.current) {
-        void saveTabs(project.id, next);
+      if (!tabsLoadedRef.current) return;
+      // Immediate, cheap, synchronous — keeps the cache canonical for reload.
+      const stamped = cacheTabsLocally(project.id, next);
+      pendingDaemonTabsRef.current = stamped;
+      if (tabsDaemonSaveTimerRef.current != null) {
+        clearTimeout(tabsDaemonSaveTimerRef.current);
       }
+      tabsDaemonSaveTimerRef.current = setTimeout(() => {
+        tabsDaemonSaveTimerRef.current = null;
+        const pending = pendingDaemonTabsRef.current;
+        pendingDaemonTabsRef.current = null;
+        if (pending) void persistTabsToDaemonNow(project.id, pending);
+      }, TAB_PERSIST_DEBOUNCE_MS);
     },
     [project.id],
   );
+
+  // Flush any pending tab write when the project changes or the view unmounts,
+  // so a fast project switch / close doesn't leave the daemon a debounce behind.
+  useEffect(() => flushTabsDaemonSave, [flushTabsDaemonSave]);
+
+  const handleActiveWorkspaceContextChange = useCallback((next: WorkspaceContextItem | null) => {
+    setActiveWorkspaceContext((current) =>
+      workspaceContextItemEqual(current, next) ? current : next,
+    );
+  }, []);
+
+  const handleWorkspaceContextsChange = useCallback((next: WorkspaceContextItem[]) => {
+    setWorkspaceContexts((current) =>
+      workspaceContextItemsEqual(current, next) ? current : next,
+    );
+  }, []);
 
   const refreshProjectFiles = useCallback(async (): Promise<ProjectFile[]> => {
     const next = await fetchProjectFiles(project.id);
@@ -1130,7 +1680,13 @@ export function ProjectView({
   }, []);
 
   const persistArtifact = useCallback(
-    async (art: Artifact, projectFilesSnapshot?: ProjectFile[]) => {
+    async (art: Artifact, projectFilesSnapshot?: ProjectFile[], sourceText?: string) => {
+      const recoveredHtml = recoverHtmlArtifactFromPrecedingDocument({
+        artifactHtml: art.html,
+        identifier: art.identifier,
+        sourceText,
+      });
+      const artifactToPersist = recoveredHtml ? { ...art, html: recoveredHtml } : art;
       const baseName = artifactBaseNameFor(art);
       const ext = artifactExtensionFor(art);
       // Pick a name that doesn't collide with an existing project file.
@@ -1146,7 +1702,7 @@ export function ProjectView({
       }
       if (ext === '.html') {
         const pointerTarget = resolveHtmlPointerArtifactTarget({
-          content: art.html,
+          content: artifactToPersist.html,
           candidateFileName: fileName,
           projectFiles: currentProjectFiles,
         });
@@ -1163,7 +1719,7 @@ export function ProjectView({
       // when only Edit-tool changes happened this turn. Without this guard,
       // such content lands as a phantom HTML file in the project panel.
       if (ext === '.html') {
-        const validation = validateHtmlArtifact(art.html);
+        const validation = validateHtmlArtifact(artifactToPersist.html);
         if (!validation.ok) {
           setError(`Refused to save artifact "${art.identifier || art.title || 'untitled'}": ${validation.reason}`);
           return;
@@ -1195,7 +1751,7 @@ export function ProjectView({
                 designSystemId: project.designSystemId,
               },
             });
-      const file = await writeProjectTextFile(project.id, fileName, art.html, {
+      const file = await writeProjectTextFile(project.id, fileName, artifactToPersist.html, {
         artifactManifest: manifest ?? undefined,
       });
       if (file) {
@@ -1232,12 +1788,32 @@ export function ProjectView({
     [project.id, project.designSystemId, project.skillId, requestOpenFile],
   );
 
+  const artifactFromStandaloneHtml = useCallback((sourceText: string): Artifact | null => {
+    const html = recoverStandaloneHtmlDocument(sourceText)
+      ?? recoverHtmlDocumentFromMarkdownFence(sourceText);
+    if (!html) return null;
+    return {
+      identifier: 'response',
+      artifactType: 'text/html',
+      title: 'Response',
+      html,
+    };
+  }, []);
+
   // Set of project file names that the chat surface uses to decide whether
   // a tool card's path is openable as a tab. Recomputed on every file-list
   // change; tool cards just read from the set.
   const projectFileNames = useMemo(
     () => new Set(projectFiles.map((f) => f.name)),
     [projectFiles],
+  );
+  const activeProjectFileName = useMemo(
+    () => (
+      openTabsState.active && projectFileNames.has(openTabsState.active)
+        ? openTabsState.active
+        : null
+    ),
+    [openTabsState.active, projectFileNames],
   );
   const agentsById = useMemo(
     () => new Map(agents.map((agent) => [agent.id, agent])),
@@ -1425,7 +2001,9 @@ export function ProjectView({
     return project.id;
   }, [project.id]);
 
-  const composedSystemPrompt = useCallback(async (): Promise<string> => {
+  const composedSystemPrompt = useCallback(async (
+    sessionModeOverride: ChatSessionMode = activeSessionMode,
+  ): Promise<string> => {
     let skillBody: string | undefined;
     let skillName: string | undefined;
     let skillMode: SkillSummary['mode'] | undefined;
@@ -1528,6 +2106,7 @@ export function ProjectView({
       audioVoiceOptions,
       audioVoiceOptionsError: audioVoiceOptionsLookupError,
       streamFormat: config.mode === 'api' ? 'plain' : undefined,
+      sessionMode: sessionModeOverride,
       locale,
       userInstructions: config.customInstructions,
       projectInstructions: project.customInstructions,
@@ -1542,6 +2121,7 @@ export function ProjectView({
     designSystems,
     config.mode,
     config.customInstructions,
+    activeSessionMode,
     locale,
   ]);
 
@@ -1663,11 +2243,25 @@ export function ProjectView({
     cancelController: AbortController,
   ) => {
     if (!shouldClearActiveRunRefs(streamingConversationIdRef.current, conversationId)) {
-      return;
+      return false;
     }
-    if (abortRef.current === controller) abortRef.current = null;
-    if (cancelRef.current === cancelController) cancelRef.current = null;
+    if (abortRef.current !== controller || cancelRef.current !== cancelController) {
+      return false;
+    }
+    abortRef.current = null;
+    cancelRef.current = null;
+    return true;
   }, []);
+
+  const clearCurrentRunStreamingMarker = useCallback((
+    conversationId: string,
+    controller: AbortController,
+    cancelController: AbortController,
+  ) => {
+    if (!clearActiveRunRefs(conversationId, controller, cancelController)) return false;
+    clearStreamingMarker(conversationId);
+    return true;
+  }, [clearActiveRunRefs, clearStreamingMarker]);
 
   const handleAssistantFeedback = useCallback(
     (assistantMessage: ChatMessage, change: ChatMessageFeedbackChange) => {
@@ -1789,20 +2383,34 @@ export function ProjectView({
   }, [project.id, activeConversationId]);
 
   const savePreviewComment = useCallback(
-    async (target: PreviewCommentTarget, note: string, attachAfterSave: boolean) => {
+    async (target: PreviewCommentTarget, note: string, attachAfterSave: boolean, images: File[] = []) => {
       if (!activeConversationId) return null;
-      const saved = await upsertPreviewComment(project.id, activeConversationId, { target, note });
-      if (!saved) return null;
-      setPreviewComments((current) => {
-        const rest = current.filter((comment) => comment.id !== saved.id);
-        return [saved, ...rest];
+      // Upload any attached images first so the saved comment carries durable
+      // file paths — this is what lets the comment list / re-opened popover
+      // re-display the images instead of losing them on echo.
+      let uploadedAttachments: PreviewCommentAttachment[] | undefined;
+      if (images.length > 0) {
+        const result = await uploadProjectFiles(project.id, images);
+        if (result.uploaded.length !== images.length) return null;
+        uploadedAttachments = result.uploaded.map((file) => ({ path: file.path, name: file.name }));
+      }
+      const existing = previewComments.find(
+        (comment) => comment.filePath === target.filePath && comment.elementId === target.elementId,
+      );
+      const attachments = mergePreviewCommentAttachments(existing?.attachments, uploadedAttachments);
+      const saved = await upsertPreviewComment(project.id, activeConversationId, {
+        target,
+        note,
+        ...(attachments.length > 0 ? { attachments } : {}),
       });
+      if (!saved) return null;
+      setPreviewComments((current) => mergeSavedPreviewComment(current, saved));
       setAttachedComments((current) =>
         attachAfterSave ? mergeAttachedComments(current, saved) : current.map((comment) => comment.id === saved.id ? saved : comment),
       );
       return saved;
     },
-    [project.id, activeConversationId],
+    [project.id, activeConversationId, previewComments],
   );
 
   const removePreviewComment = useCallback(
@@ -1856,11 +2464,7 @@ export function ProjectView({
     const attachRecoverableRuns = async () => {
       const missingRunIdMessages = messages.filter((m) => {
         if (m.role !== 'assistant' || m.runId) return false;
-        const producedFileCount = Array.isArray(m.producedFiles) ? m.producedFiles.length : 0;
-        return (
-          isActiveRunStatus(m.runStatus) ||
-          (m.runStatus === 'succeeded' && (!m.content.trim() || producedFileCount === 0))
-        );
+        return isActiveRunStatus(m.runStatus);
       });
       const activeRuns = missingRunIdMessages.length > 0
         ? await listActiveChatRuns(project.id, reattachConversationId)
@@ -1885,14 +2489,8 @@ export function ProjectView({
       for (const message of messages) {
         if (cancelled) return;
         if (message.role !== 'assistant') continue;
-        const producedFileCount = Array.isArray(message.producedFiles)
-          ? message.producedFiles.length
-          : 0;
-        const needsTerminalReplay =
-          message.runStatus === 'succeeded' &&
-          (!message.content.trim() || producedFileCount === 0);
-        const needsFullReplay = needsTerminalReplay || isActiveRunStatus(message.runStatus);
-        if (!isActiveRunStatus(message.runStatus) && !needsTerminalReplay) continue;
+        const needsFullReplay = isActiveRunStatus(message.runStatus);
+        if (!needsFullReplay) continue;
         const fallbackRun = !message.runId
           ? activeByMessage.get(message.id) ?? historicalByMessage.get(message.id) ?? null
           : null;
@@ -1940,7 +2538,11 @@ export function ProjectView({
         }
         updateMessageById(
           message.id,
-          (prev) => ({ ...prev, runStatus: status.status }),
+          (prev) => ({
+            ...prev,
+            runStatus: status.status,
+            ...(status.resumable !== undefined ? { resumable: status.resumable } : {}),
+          }),
           true,
         );
 
@@ -2051,9 +2653,22 @@ export function ProjectView({
               textBuffer.appendEvent(ev);
             },
             onDone: () => {
-              textBuffer.flush();
+              // A reattached run interrupted by a "send now" still receives a
+              // late onDone from the daemon. Decide ownership first, then bail
+              // BEFORE any current-run side effect (committing buffered text,
+              // repainting the artifact preview via setArtifact, re-finalizing
+              // the message) — only release this run's bookkeeping. See the
+              // streamViaDaemon onDone for the ownership rationale.
+              const runMayFinalize =
+                !supersededRunsRef.current.has(controller);
+              if (runMayFinalize) textBuffer.flush();
               textBuffer.cancel();
               unregisterTextBuffer();
+              completedReattachRunsRef.current.add(runId);
+              reattachControllersRef.current.delete(runId);
+              reattachCancelControllersRef.current.delete(runId);
+              clearCurrentRunStreamingMarker(reattachConversationId, controller, cancelController);
+              if (!runMayFinalize) return;
               for (const ev of parser.flush()) {
                 if (ev.type === 'artifact:end') {
                   parsedArtifact = parsedArtifact
@@ -2078,11 +2693,6 @@ export function ProjectView({
                 true,
                 { telemetryFinalized: true },
               );
-              completedReattachRunsRef.current.add(runId);
-              reattachControllersRef.current.delete(runId);
-              reattachCancelControllersRef.current.delete(runId);
-              clearActiveRunRefs(reattachConversationId, controller, cancelController);
-              clearStreamingMarker(reattachConversationId);
               void (async () => {
                 const preTurn = message.preTurnFileNames;
                 let nextFiles = await refreshProjectFiles();
@@ -2091,10 +2701,13 @@ export function ProjectView({
                 // fall back to the current list for legacy messages.
                 const beforeFileNames = new Set(preTurn ?? nextFiles.map((f) => f.name));
                 let recoveredExistingArtifact: ProjectFile | null = null;
-                if (parsedArtifact?.html) {
+                const artifactToPersist = parsedArtifact?.html
+                  ? parsedArtifact
+                  : artifactFromStandaloneHtml(replayedContent);
+                if (artifactToPersist?.html) {
                   const runStartedAt = status.createdAt || message.startedAt || message.createdAt;
                   recoveredExistingArtifact = findExistingArtifactProjectFile(
-                    parsedArtifact,
+                    artifactToPersist,
                     nextFiles,
                     { minMtime: runStartedAt },
                   );
@@ -2102,12 +2715,14 @@ export function ProjectView({
                     savedArtifactRef.current = recoveredExistingArtifact.name;
                     requestOpenFile(recoveredExistingArtifact.name);
                   } else {
-                    await persistArtifact(parsedArtifact, nextFiles);
+                    await persistArtifact(artifactToPersist, nextFiles, replayedContent);
                     nextFiles = await refreshProjectFiles();
                   }
                 }
-                const diff = nextFiles.filter((f) => !beforeFileNames.has(f.name));
+                const diff = computeProducedFiles(beforeFileNames, nextFiles) ?? [];
                 const produced = mergeRecoveredArtifact(diff, recoveredExistingArtifact);
+                const producedHtmlToOpen = selectAutoOpenProducedHtml(produced);
+                if (producedHtmlToOpen) requestOpenFile(producedHtmlToOpen);
                 if (produced.length > 0) {
                   updateMessageById(
                     message.id,
@@ -2122,25 +2737,32 @@ export function ProjectView({
             },
             onError: (err) => {
               const errorCode = (err as Error & { code?: string }).code;
+              const resumable = (err as Error & { resumable?: boolean }).resumable === true;
+              // A superseded reattached run must not paint a global failure
+              // banner or re-finalize its message over the replacement run.
+              const runMayFinalize =
+                !supersededRunsRef.current.has(controller);
               textBuffer.flush();
               textBuffer.cancel();
               unregisterTextBuffer();
-              setError(err.message);
-              appendAssistantErrorEvent(message.id, err.message, errorCode);
-              updateMessageById(
-                message.id,
-                (prev) => ({
-                  ...prev,
-                  runStatus: 'failed',
-                  endedAt: prev.endedAt ?? Date.now(),
-                }),
-                true,
-              );
+              if (runMayFinalize) {
+                setError(err.message);
+                appendAssistantErrorEvent(message.id, err.message, errorCode);
+                updateMessageById(
+                  message.id,
+                  (prev) => ({
+                    ...prev,
+                    runStatus: 'failed',
+                    endedAt: prev.endedAt ?? Date.now(),
+                    resumable,
+                  }),
+                  true,
+                );
+              }
               completedReattachRunsRef.current.add(runId);
               reattachControllersRef.current.delete(runId);
               reattachCancelControllersRef.current.delete(runId);
-              clearActiveRunRefs(reattachConversationId, controller, cancelController);
-              clearStreamingMarker(reattachConversationId);
+              clearCurrentRunStreamingMarker(reattachConversationId, controller, cancelController);
               persistNow({ telemetryFinalized: true });
             },
           },
@@ -2161,8 +2783,7 @@ export function ProjectView({
               completedReattachRunsRef.current.add(runId);
               reattachControllersRef.current.delete(runId);
               reattachCancelControllersRef.current.delete(runId);
-              clearActiveRunRefs(reattachConversationId, controller, cancelController);
-              clearStreamingMarker(reattachConversationId);
+              clearCurrentRunStreamingMarker(reattachConversationId, controller, cancelController);
               persistNow({ telemetryFinalized: true });
             }
           },
@@ -2173,7 +2794,12 @@ export function ProjectView({
           },
         })
           .catch((err) => {
-            if ((err as Error).name !== 'AbortError') {
+            // Skip AbortError (expected on interrupt) and any error from a run
+            // that was tagged superseded by a send-now interrupt — it must not
+            // surface a global failure over the replacement.
+            const runMayFinalize =
+              !supersededRunsRef.current.has(controller);
+            if ((err as Error).name !== 'AbortError' && runMayFinalize) {
               const msg = err instanceof Error ? err.message : String(err);
               setError(msg);
               appendAssistantErrorEvent(message.id, msg);
@@ -2214,39 +2840,120 @@ export function ProjectView({
     markStreamingConversation,
     clearStreamingMarker,
     clearActiveRunRefs,
+    clearCurrentRunStreamingMarker,
     refreshProjectFiles,
     persistArtifact,
     requestOpenFile,
     onProjectsRefresh,
   ]);
 
-  const enqueueChatSend = useCallback((item: QueuedChatSend) => {
-    const next = [...queuedChatSendsRef.current, item];
+  const commitQueuedChatSends = useCallback((next: QueuedChatSend[]) => {
     queuedChatSendsRef.current = next;
     setQueuedChatSends(next);
-  }, []);
+    saveQueuedChatSends(project.id, next);
+  }, [project.id]);
+
+  const enqueueChatSend = useCallback((item: QueuedChatSend) => {
+    const next = [...queuedChatSendsRef.current, item];
+    commitQueuedChatSends(next);
+  }, [commitQueuedChatSends]);
 
   const removeQueuedChatSend = useCallback((id: string) => {
     const next = queuedChatSendsRef.current.filter((item) => item.id !== id);
-    queuedChatSendsRef.current = next;
-    setQueuedChatSends(next);
-  }, []);
+    commitQueuedChatSends(next);
+  }, [commitQueuedChatSends]);
 
-  const updateQueuedChatSend = useCallback((id: string, prompt: string) => {
-    const next = queuedChatSendsRef.current.map((item) =>
-      item.id === id ? { ...item, prompt } : item,
-    );
-    queuedChatSendsRef.current = next;
-    setQueuedChatSends(next);
-  }, []);
+  const updateQueuedChatSend = useCallback((id: string, update: QueuedChatSendUpdate) => {
+    const next = queuedChatSendsRef.current.map((item) => {
+      if (item.id !== id) return item;
+      const meta = stripQueueOnlyFromMeta(update.meta);
+      const updated: QueuedChatSend = {
+        ...item,
+        prompt: update.prompt,
+        attachments: update.attachments,
+        commentAttachments: update.commentAttachments,
+      };
+      if (meta === undefined) delete updated.meta;
+      else updated.meta = meta;
+      return updated;
+    });
+    commitQueuedChatSends(next);
+  }, [commitQueuedChatSends]);
 
   const prioritizeQueuedChatSend = useCallback((id: string) => {
     const item = queuedChatSendsRef.current.find((candidate) => candidate.id === id);
     if (!item) return;
     const next = [item, ...queuedChatSendsRef.current.filter((candidate) => candidate.id !== id)];
-    queuedChatSendsRef.current = next;
-    setQueuedChatSends(next);
-  }, []);
+    commitQueuedChatSends(next);
+  }, [commitQueuedChatSends]);
+
+  const reorderCurrentConversationQueuedChatSends = useCallback((orderedIds: string[]) => {
+    if (!activeConversationId || orderedIds.length === 0) return;
+    const order = new Map(orderedIds.map((id, index) => [id, index]));
+    const current = queuedChatSendsRef.current;
+    const originalConversationItems = current.filter(
+      (item) => item.conversationId === activeConversationId,
+    );
+    const sortedConversationItems = [...originalConversationItems].sort((a, b) => {
+      const aOrder = order.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = order.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      return aOrder - bOrder;
+    });
+    if (
+      sortedConversationItems.every((item, index) => item.id === originalConversationItems[index]?.id)
+    ) {
+      return;
+    }
+    let cursor = 0;
+    const next = current.map((item) => {
+      if (item.conversationId !== activeConversationId) return item;
+      return sortedConversationItems[cursor++] ?? item;
+    });
+    commitQueuedChatSends(next);
+  }, [activeConversationId, commitQueuedChatSends]);
+
+  const queueChatSendForCurrentConversation = useCallback((input: {
+    attachments: ChatAttachment[];
+    commentAttachments: ChatCommentAttachment[];
+    conversationId: string;
+    meta?: ProjectChatSendMeta;
+    prompt: string;
+  }) => {
+    const queuedMeta = stripQueueOnlyFromMeta(input.meta);
+    enqueueChatSend({
+      id: randomUUID(),
+      conversationId: input.conversationId,
+      prompt: input.prompt,
+      attachments: input.attachments,
+      commentAttachments: input.commentAttachments,
+      ...(queuedMeta === undefined ? {} : { meta: queuedMeta }),
+      createdAt: Date.now(),
+    });
+    if (input.commentAttachments.length > 0) {
+      const reservedCommentIds = new Set(
+        input.commentAttachments
+          .filter((attachment) => attachment.source !== 'board-batch')
+          .map((attachment) => attachment.id),
+      );
+      setAttachedComments((current) =>
+        current.filter((comment) => !reservedCommentIds.has(comment.id)),
+      );
+      if (reservedCommentIds.size > 0) {
+        setPreviewComments((current) =>
+          current.map((comment) =>
+            reservedCommentIds.has(comment.id)
+              ? { ...comment, status: 'applying' }
+              : comment,
+          ),
+        );
+        void Promise.all(
+          Array.from(reservedCommentIds, (commentId) =>
+            patchPreviewCommentStatus(project.id, input.conversationId, commentId, 'applying'),
+          ),
+        ).catch(() => {});
+      }
+    }
+  }, [enqueueChatSend, project.id]);
 
   const handleSend = useCallback(
     async (
@@ -2256,36 +2963,46 @@ export function ProjectView({
       meta?: ProjectChatSendMeta,
       baseMessages?: ChatMessage[],
     ) => {
-      if (!activeConversationId) return;
-      if (messagesConversationIdRef.current !== activeConversationId) return;
+      if (!activeConversationId) return false;
+      if (messagesConversationIdRef.current !== activeConversationId) return false;
+      const runSessionMode = meta?.sessionMode ?? activeSessionMode;
       const retryTarget = meta?.retryOfAssistantId
         ? resolveRetryTarget(messages, meta.retryOfAssistantId)
         : null;
-      if (meta?.retryOfAssistantId && !retryTarget) return;
+      if (meta?.retryOfAssistantId && !retryTarget) return false;
+      const runContext = meta?.context ?? retryTarget?.userMsg.runContext;
       const historyBase = retryTarget ? retryTarget.priorMessages : baseMessages ?? messages;
       if (
         !retryTarget &&
         !prompt.trim() &&
         attachments.length === 0 &&
         commentAttachments.length === 0
-      ) return;
-      if (currentConversationBusy) {
-        enqueueChatSend({
-          id: randomUUID(),
+      ) return false;
+      const effectiveAttachments = mergeChatAttachments(
+        attachments,
+        ...commentAttachments.map((attachment) =>
+          chatAttachmentsFromPreviewCommentImages(attachment.imageAttachments),
+        ),
+      );
+      if (!retryTarget && meta?.queueOnly) {
+        queueChatSendForCurrentConversation({
           conversationId: activeConversationId,
           prompt,
-          attachments,
+          attachments: effectiveAttachments,
           commentAttachments,
-          ...(meta === undefined ? {} : { meta }),
-          createdAt: Date.now(),
+          meta: { ...(meta ?? {}), sessionMode: runSessionMode },
         });
-        if (commentAttachments.length > 0) {
-          const reservedCommentIds = new Set(commentAttachments.map((attachment) => attachment.id));
-          setAttachedComments((current) =>
-            current.filter((comment) => !reservedCommentIds.has(comment.id)),
-          );
-        }
-        return;
+        return false;
+      }
+      if (currentConversationBusy) {
+        queueChatSendForCurrentConversation({
+          conversationId: activeConversationId,
+          prompt,
+          attachments: effectiveAttachments,
+          commentAttachments,
+          meta: { ...(meta ?? {}), sessionMode: runSessionMode },
+        });
+        return false;
       }
       setChatSeed(null);
       const runConversationId = activeConversationId;
@@ -2296,11 +3013,21 @@ export function ProjectView({
         role: 'user',
         content: prompt,
         createdAt: startedAt,
-        attachments: attachments.length > 0 ? attachments : undefined,
+        sessionMode: runSessionMode,
+        ...(meta?.appliedPluginSnapshot
+          ? { appliedPluginSnapshot: meta.appliedPluginSnapshot }
+          : {}),
+        ...(runContext ? { runContext } : {}),
+        attachments: effectiveAttachments.length > 0 ? effectiveAttachments : undefined,
         commentAttachments: commentAttachments.length > 0 ? commentAttachments : undefined,
       };
-      const runAttachments = userMsg.attachments ?? [];
       const runCommentAttachments = userMsg.commentAttachments ?? [];
+      const runAttachments = mergeChatAttachments(
+        userMsg.attachments ?? [],
+        ...runCommentAttachments.map((attachment) =>
+          chatAttachmentsFromPreviewCommentImages(attachment.imageAttachments),
+        ),
+      );
       const selectedAgent =
         config.mode === 'daemon' && config.agentId
           ? agentsById.get(config.agentId)
@@ -2326,7 +3053,7 @@ export function ProjectView({
             )
           : apiProtocolModelLabel(config.apiProtocol, config.model);
       const preTurnFileNames = projectFiles.map((f) => f.name);
-      const assistantId = retryTarget?.failedAssistant.id ?? randomUUID();
+      const assistantId = randomUUID();
       const assistantMsg: ChatMessage = {
         id: assistantId,
         role: 'assistant',
@@ -2334,7 +3061,7 @@ export function ProjectView({
         agentId: assistantAgentId,
         agentName: assistantAgentName,
         events: [],
-        createdAt: retryTarget?.failedAssistant.createdAt ?? startedAt,
+        createdAt: startedAt,
         runStatus: config.mode === 'daemon' ? 'running' : undefined,
         startedAt,
         preTurnFileNames,
@@ -2369,7 +3096,10 @@ export function ProjectView({
       const nextHistory = retryTarget
         ? [...retryTarget.priorMessages, userMsg]
         : [...historyBase, userMsg];
-      setMessages([...nextHistory, assistantMsg]);
+      const nextVisibleMessages = retryTarget
+        ? [...nextHistory, ...retryTarget.preservedAttempts, assistantMsg]
+        : [...nextHistory, assistantMsg];
+      setMessages(nextVisibleMessages);
       markStreamingConversation(runConversationId);
       updateConversationLatestRun(config.mode === 'daemon' ? 'running' : 'queued');
       setArtifact(null);
@@ -2486,6 +3216,17 @@ export function ProjectView({
         // file the moment the agent finishes writing it. The file-creating
         // tools we care about: Write (new file), Edit (existing file —
         // surfacing the freshly-modified file is also useful).
+        if (ev.kind === 'tool_use') {
+          // The authoritative input has landed; drop the live partial so the
+          // card renders from the parsed `tool_use.input` instead of the
+          // mid-token JSON fragment.
+          setLiveToolInput((prev) => {
+            if (!(ev.id in prev)) return prev;
+            const next = { ...prev };
+            delete next[ev.id];
+            return next;
+          });
+        }
         if (ev.kind === 'tool_use' && ((ev.name === 'Write' || ev.name === 'write') || ev.name === 'Edit')) {
           const input = ev.input as { file_path?: unknown; filePath?: unknown } | null;
           const filePath = input?.file_path ?? input?.filePath;
@@ -2590,7 +3331,39 @@ export function ProjectView({
           if (ev.kind === 'text') textBuffer.appendTextEvent(ev.text);
           else pushEvent(ev);
         },
+        onToolInputDelta: (id: string, name: string, delta: string) => {
+          setLiveToolInput((prev) => ({
+            ...prev,
+            [id]: {
+              name,
+              text: (prev[id]?.text ?? '') + delta,
+              // Pin the tool's stream position the first time we see it: the
+              // count of events already on the message is everything the model
+              // emitted before the tool call (its preamble). Buffered text
+              // (appendTextEvent) isn't flushed into `events` until the next
+              // frame, so add 1 for any still-pending preamble chunk — it will
+              // commit as one text event just before this tool's position.
+              seq:
+                prev[id]?.seq ??
+                ((latestAssistantMsg.events?.length ?? 0) + (textBuffer.hasPendingText() ? 1 : 0)),
+            },
+          }));
+        },
         onDone: (fullText = '') => {
+          // The daemon delivers onDone even for a canceled run, so a run
+          // superseded by a "send now" interrupt can still land here and must
+          // not apply its completion side effects over the replacement. A run
+          // may finalize unless it was tagged superseded at interrupt time
+          // (recorded before handleStop cleared the refs), which is reliable
+          // even before the replacement send attaches — unlike abortRef, whose
+          // terminal onRunStatus / handleStop churn make it ambiguous here.
+          const runMayFinalize =
+            !supersededRunsRef.current.has(controller);
+          if (!runMayFinalize) {
+            textBuffer.cancel();
+            cancelSendTextBuffer();
+            return;
+          }
           textBuffer.flush();
           textBuffer.cancel();
           cancelSendTextBuffer();
@@ -2632,9 +3405,12 @@ export function ProjectView({
             if (runCommentAttachments.length > 0) {
               void patchAttachedStatuses(runCommentAttachments, 'failed');
             }
-            clearActiveRunRefs(runConversationId, controller, cancelController);
-            clearStreamingMarker(runConversationId);
-            updateConversationLatestRun('failed', endedAt);
+            const ownsCurrentRun = clearCurrentRunStreamingMarker(
+              runConversationId,
+              controller,
+              cancelController,
+            );
+            if (ownsCurrentRun) updateConversationLatestRun('failed', endedAt);
             void refreshProjectFiles();
             onProjectsRefresh();
             return;
@@ -2652,20 +3428,29 @@ export function ProjectView({
           if (runCommentAttachments.length > 0) {
             void patchAttachedStatuses(runCommentAttachments, 'needs_review');
           }
-          clearActiveRunRefs(runConversationId, controller, cancelController);
-          clearStreamingMarker(runConversationId);
-          updateConversationLatestRun(finalRunStatus ?? 'succeeded', endedAt);
+          const ownsCurrentRun = clearCurrentRunStreamingMarker(
+            runConversationId,
+            controller,
+            cancelController,
+          );
+          if (ownsCurrentRun) updateConversationLatestRun(finalRunStatus ?? 'succeeded', endedAt);
           // Refetch the file list directly (rather than just bumping the
           // refresh signal) so we can diff against the pre-turn snapshot
           // and attach the new files to the assistant message as download
           // chips.
           void (async () => {
             let nextFiles = await refreshProjectFiles();
-            if (parsedArtifact?.html) {
-              await persistArtifact(parsedArtifact, nextFiles);
+            const finalText = streamedText || fullText;
+            const artifactToPersist = parsedArtifact?.html
+              ? parsedArtifact
+              : artifactFromStandaloneHtml(finalText);
+            if (artifactToPersist?.html) {
+              await persistArtifact(artifactToPersist, nextFiles, finalText);
               nextFiles = await refreshProjectFiles();
             }
-            const produced = nextFiles.filter((f) => !beforeFileNames.has(f.name));
+            const produced = computeProducedFiles(beforeFileNames, nextFiles) ?? [];
+            const producedHtmlToOpen = selectAutoOpenProducedHtml(produced);
+            if (producedHtmlToOpen) requestOpenFile(producedHtmlToOpen);
             setMessages((curr) => {
               const updated = curr.map((m) =>
                 m.id === assistantId
@@ -2683,24 +3468,38 @@ export function ProjectView({
         onError: (err: Error) => {
           const endedAt = Date.now();
           const errorCode = (err as Error & { code?: string }).code;
+          const resumable = (err as Error & { resumable?: boolean }).resumable === true;
+          // A run superseded by a "send now" interrupt can still surface a
+          // late disconnect error (e.g. a canceled stream that lost its
+          // terminal SSE). It must not paint a global failure banner or
+          // re-finalize its already-canceled assistant message once it was
+          // tagged superseded. See the onDone above for the ownership rationale.
+          const runMayFinalize =
+            !supersededRunsRef.current.has(controller);
           textBuffer.flush();
           textBuffer.cancel();
           cancelSendTextBuffer();
-          setError(err.message);
-          appendAssistantErrorEvent(assistantId, err.message, errorCode);
-          updateAssistant((prev) => ({
-            ...prev,
-            endedAt,
-            runStatus: config.mode === 'api' || prev.runId || isActiveRunStatus(prev.runStatus)
-              ? 'failed'
-              : prev.runStatus,
-          }));
-          if (runCommentAttachments.length > 0) {
-            void patchAttachedStatuses(runCommentAttachments, 'failed');
+          if (runMayFinalize) {
+            setError(err.message);
+            appendAssistantErrorEvent(assistantId, err.message, errorCode);
+            updateAssistant((prev) => ({
+              ...prev,
+              endedAt,
+              runStatus: config.mode === 'api' || prev.runId || isActiveRunStatus(prev.runStatus)
+                ? 'failed'
+                : prev.runStatus,
+              resumable,
+            }));
+            if (runCommentAttachments.length > 0) {
+              void patchAttachedStatuses(runCommentAttachments, 'failed');
+            }
           }
-          clearActiveRunRefs(runConversationId, controller, cancelController);
-          clearStreamingMarker(runConversationId);
-          updateConversationLatestRun('failed', endedAt);
+          const ownsCurrentRun = clearCurrentRunStreamingMarker(
+            runConversationId,
+            controller,
+            cancelController,
+          );
+          if (ownsCurrentRun) updateConversationLatestRun('failed', endedAt);
           setMessages((curr) => {
             const finalized = curr.find((m) => m.id === assistantId);
             if (finalized) persistMessage(finalized, { telemetryFinalized: true });
@@ -2713,7 +3512,7 @@ export function ProjectView({
       if (config.mode === 'daemon') {
         if (!config.agentId) {
           handlers.onError(new Error('Pick a local agent first (top bar).'));
-          return;
+          return true;
         }
         const choice = effectiveSelectedAgentChoice;
         // v2 analytics: when the active project is a DS workspace
@@ -2745,6 +3544,13 @@ export function ProjectView({
               },
             }
           : undefined;
+        // A caller-supplied entry_from (e.g. 'resume_continue' from the
+        // resumable-failure Continue action) overrides the DS default so the
+        // run is attributed to the affordance that started it.
+        const runAnalyticsHints =
+          meta?.entryFrom
+            ? { ...(dsAnalyticsHints ?? {}), entryFrom: meta.entryFrom }
+            : dsAnalyticsHints;
         void streamViaDaemon({
           agentId: config.agentId,
           history: nextHistory,
@@ -2757,15 +3563,19 @@ export function ProjectView({
           clientRequestId: randomUUID(),
           skillId: project.skillId ?? null,
           skillIds: Array.isArray(meta?.skillIds) ? meta.skillIds : [],
-          context: meta?.context,
+          context: runContext,
           designSystemId: project.designSystemId ?? null,
           attachments: runAttachments.map((a) => a.path),
           commentAttachments: runCommentAttachments,
+          sessionMode: runSessionMode,
+          appliedPluginSnapshotId:
+            meta?.appliedPluginSnapshotId ?? meta?.appliedPluginSnapshot?.snapshotId ?? null,
           research: meta?.research,
+          mediaExecution: mediaExecutionPolicyForProjectMetadata(project.metadata),
           model: choice?.model ?? null,
           reasoning: choice?.reasoning ?? null,
           locale,
-          ...(dsAnalyticsHints ? { analyticsHints: dsAnalyticsHints } : {}),
+          ...(runAnalyticsHints ? { analyticsHints: runAnalyticsHints } : {}),
           onRunCreated: (runId) => {
             const pinnedAssistant = {
               ...latestAssistantMsg,
@@ -2780,6 +3590,8 @@ export function ProjectView({
           },
           onRunStatus: (runStatus) => {
             const endedAt = isTerminalRunStatus(runStatus) ? Date.now() : undefined;
+            const runMayFinalize =
+              !supersededRunsRef.current.has(controller);
             updateMessageById(
               assistantId,
               (prev) => ({
@@ -2790,10 +3602,10 @@ export function ProjectView({
               true,
               runStatus === 'canceled' ? { telemetryFinalized: true } : undefined,
             );
+            if (!runMayFinalize) return;
             updateConversationLatestRun(runStatus, endedAt);
             if (isTerminalRunStatus(runStatus)) {
-              clearActiveRunRefs(runConversationId, controller, cancelController);
-              clearStreamingMarker(runConversationId);
+              clearCurrentRunStreamingMarker(runConversationId, controller, cancelController);
             }
           },
           onRunEventId: (lastRunEventId) => {
@@ -2801,6 +3613,7 @@ export function ProjectView({
             persistAssistantSoon();
           },
         });
+        return true;
       } else {
         // Mirror the daemon chat-route memory hook for BYOK chats. The
         // CLI path runs `extractFromMessage` BEFORE composing the prompt
@@ -2853,12 +3666,16 @@ export function ProjectView({
             // on the next event.
           }
         }
-        const systemPrompt = await composedSystemPrompt();
+        const systemPrompt = await composedSystemPrompt(runSessionMode);
         const apiHistory = await historyWithApiAttachmentContext(
-          historyWithCommentAttachmentContext(nextHistory, userMsg.id),
+          historyWithCommentAttachmentContext(
+            historyWithWorkspaceContext(nextHistory, userMsg.id, runContext),
+            userMsg.id,
+          ),
           userMsg.id,
           project.id,
           projectFiles,
+          { omitNativeImageAttachments: usesAnthropicProxy(config) },
         );
         pushEvent({ kind: 'status', label: 'requesting', detail: config.model });
         let accumulatedAssistantText = '';
@@ -2893,19 +3710,38 @@ export function ProjectView({
           // default model. Prefer the live composer override; fall back
           // to the Settings default when the composer dropdown is on
           // "use default". Other protocols ignore unknown body fields.
-          byokImageModel: byokImageModelOverride || config.byokImageModel,
+          byokImageModel:
+            byokImageModelOverride || config.byokImageModel || byokImageModelOptionsPV[0]?.id,
+          byokVideoModel:
+            byokVideoModelOverride || config.byokVideoModel || byokVideoModelOptionsPV[0]?.id,
+          byokSpeechModel:
+            byokSpeechModelOverride || config.byokSpeechModel || byokSpeechModelOptionsPV[0]?.id,
+          byokSpeechVoice: byokSpeechVoiceOverride || config.byokSpeechVoice,
         });
+        return true;
       }
     },
     [
       attachedComments,
       activeConversationId,
+      activeSessionMode,
       currentConversationBusy,
-      enqueueChatSend,
+      queueChatSendForCurrentConversation,
       messages,
       config,
       locale,
       agentsById,
+      // Per-session BYOK image/video model overrides are read inside this
+      // callback (see the streamMessage context below). Without them in the
+      // deps, the dropdown updates its state + display but handleSend keeps a
+      // stale closure and sends the previously selected model.
+      byokImageModelOverride,
+      byokVideoModelOverride,
+      byokSpeechModelOverride,
+      byokSpeechVoiceOverride,
+      byokImageModelOptionsPV,
+      byokVideoModelOptionsPV,
+      byokSpeechModelOptionsPV,
       composedSystemPrompt,
       onTouchProject,
       project.id,
@@ -2921,46 +3757,157 @@ export function ProjectView({
       updateMessageById,
       markStreamingConversation,
       clearStreamingMarker,
-      clearActiveRunRefs,
+      clearCurrentRunStreamingMarker,
       onProjectsRefresh,
       onProjectChange,
     ],
   );
 
+  // Cancel every in-flight run for the current conversation (the user's own
+  // streaming turn plus any reattached runs), mark their assistant messages
+  // canceled, and drop the streaming state. Defined here — ahead of the
+  // queued-send handlers — because "send now" interrupts the active run to
+  // make room for the prioritized send.
+  const handleStop = useCallback(() => {
+    const stoppedAt = Date.now();
+    cancelSendTextBuffer(true);
+    cancelReattachTextBuffers(true);
+    cancelRef.current?.abort();
+    cancelRef.current = null;
+    for (const controller of reattachCancelControllersRef.current.values()) {
+      controller.abort();
+    }
+    reattachCancelControllersRef.current.clear();
+    abortRef.current?.abort();
+    abortRef.current = null;
+    for (const controller of reattachControllersRef.current.values()) {
+      controller.abort();
+    }
+    reattachControllersRef.current.clear();
+    setStreaming(false);
+    streamingConversationIdRef.current = null;
+    setStreamingConversationId(null);
+    setMessages((curr) => {
+      const { messages: next, finalized } = finalizeActiveAssistantMessagesOnStop(curr, stoppedAt);
+      for (const message of finalized) persistMessage(message, { telemetryFinalized: true });
+      return next;
+    });
+  }, [cancelSendTextBuffer, cancelReattachTextBuffers, persistMessage]);
+
+  // Flip the deck preview to the slide a queued send's marked element lives on
+  // the moment that send starts processing. No-op for plain prompts or marks
+  // without a slide index; FileWorkspace/FileViewer ignore it unless the named
+  // file is the open deck.
+  const armSlideNavForQueuedSend = useCallback((item: QueuedChatSend) => {
+    const target = queuedSlideNavTarget(item.commentAttachments);
+    if (!target) return;
+    setSlideNavRequest({ name: target.filePath, slideIndex: target.slideIndex, nonce: Date.now() });
+  }, []);
+
   const sendQueuedChatSendNow = useCallback((id: string) => {
     const item = queuedChatSendsRef.current.find((candidate) => candidate.id === id);
     if (!item) return;
     if (currentConversationBusy) {
+      // "Send now" while the agent is still working: the user has explicitly
+      // chosen this turn over the in-flight one, so interrupt the running run
+      // and move this item to the front. Stopping flips the conversation out
+      // of its busy state, and the auto-start effect below then flushes the
+      // now-first queued send — reusing the same path as a natural completion,
+      // so runs never overlap.
+      //
+      // Record the runs we're superseding BEFORE handleStop() clears the active
+      // refs. The daemon still delivers a late terminal callback for the
+      // canceled run; tagging its controller here lets those callbacks be
+      // recognized as stale and skip every current-run side effect, even if the
+      // replacement send hasn't attached yet.
+      if (abortRef.current) supersededRunsRef.current.add(abortRef.current);
+      for (const controller of reattachControllersRef.current.values()) {
+        supersededRunsRef.current.add(controller);
+      }
+      // The interrupted turn moved its preview-comment attachments to
+      // 'applying' when it started; since we now suppress its terminal
+      // callbacks, reset them to 'open' so they don't stay stuck mid-apply.
+      // Reset ONLY the in-flight run's comments: queued sends (including the
+      // one being prioritized) also hold their attachments in 'applying', and
+      // those must stay reserved — the replacement run re-applies them. The
+      // in-flight run's comments are exactly the 'applying' ones not owned by
+      // any queued send.
+      const queuedCommentIds = new Set(
+        queuedChatSendsRef.current.flatMap((send) =>
+          send.commentAttachments.map((attachment) => attachment.id),
+        ),
+      );
+      const stuckApplying = previewCommentsRef.current.filter(
+        (comment) => comment.status === 'applying' && !queuedCommentIds.has(comment.id),
+      );
+      if (stuckApplying.length > 0) {
+        const resetIds = new Set(stuckApplying.map((comment) => comment.id));
+        setPreviewComments((current) =>
+          current.map((comment) =>
+            resetIds.has(comment.id) ? { ...comment, status: 'open' } : comment,
+          ),
+        );
+        void Promise.all(
+          stuckApplying.map((comment) =>
+            patchPreviewCommentStatus(project.id, comment.conversationId, comment.id, 'open'),
+          ),
+        ).catch(() => {});
+      }
       prioritizeQueuedChatSend(id);
+      handleStop();
       return;
     }
-    removeQueuedChatSend(id);
-    void handleSend(
-      item.prompt,
-      item.attachments,
-      item.commentAttachments,
-      item.meta,
-    );
-  }, [currentConversationBusy, handleSend, prioritizeQueuedChatSend, removeQueuedChatSend]);
+    void (async () => {
+      armSlideNavForQueuedSend(item);
+      const started = await handleSend(
+        item.prompt,
+        item.attachments,
+        item.commentAttachments,
+        item.meta,
+      );
+      if (started) removeQueuedChatSend(id);
+    })();
+  }, [armSlideNavForQueuedSend, currentConversationBusy, handleSend, handleStop, prioritizeQueuedChatSend, project.id, removeQueuedChatSend]);
 
   useEffect(() => {
+    if (currentConversationBusy) {
+      startingQueuedChatSendIdRef.current = null;
+      return;
+    }
+    if (startingQueuedChatSendIdRef.current) return;
     if (!activeConversationId) return;
-    if (currentConversationBusy) return;
     if (messagesConversationIdRef.current !== activeConversationId) return;
     const next = queuedChatSendsRef.current.find(
       (item) => item.conversationId === activeConversationId,
     );
     if (!next) return;
-    removeQueuedChatSend(next.id);
-    void handleSend(
-      next.prompt,
-      next.attachments,
-      next.commentAttachments,
-      next.meta,
-    );
+    startingQueuedChatSendIdRef.current = next.id;
+    armSlideNavForQueuedSend(next);
+    void (async () => {
+      const started = await handleSend(
+        next.prompt,
+        next.attachments,
+        next.commentAttachments,
+        next.meta,
+      );
+      if (!started) {
+        if (startingQueuedChatSendIdRef.current === next.id) {
+          startingQueuedChatSendIdRef.current = null;
+        }
+        return;
+      }
+      removeQueuedChatSend(next.id);
+      window.setTimeout(() => {
+        if (startingQueuedChatSendIdRef.current !== next.id) return;
+        startingQueuedChatSendIdRef.current = null;
+        setQueuedAutoStartTick((tick) => tick + 1);
+      }, 0);
+    })();
   }, [
     activeConversationId,
+    armSlideNavForQueuedSend,
     currentConversationBusy,
+    queuedAutoStartTick,
     queuedChatSends,
     handleSend,
     removeQueuedChatSend,
@@ -2970,6 +3917,22 @@ export function ProjectView({
     (assistantMessage: ChatMessage) => {
       if (currentConversationActionDisabled) return;
       void handleSend('', [], [], { retryOfAssistantId: assistantMessage.id });
+    },
+    [currentConversationActionDisabled, handleSend],
+  );
+
+  // "Continue" on a resumable failed run: send a fresh turn in the same
+  // conversation. For a session-resuming runtime (Claude) the daemon persisted
+  // the failed run's CLI session, so this turn resumes it (`--resume`) and the
+  // agent continues from its committed work instead of restarting. Mirrors the
+  // "Continue remaining tasks" affordance; unlike Retry it does not replay the
+  // prior turn from scratch. Tagged `entryFrom: 'resume_continue'` so
+  // run_created / run_finished can quantify how often resume fires and whether
+  // it recovers (the whole point is to show the mechanism lowers failure rate).
+  const handleResumeRun = useCallback(
+    (_assistantMessage: ChatMessage) => {
+      if (currentConversationActionDisabled) return;
+      void handleSend(RESUME_CONTINUE_PROMPT, [], [], { entryFrom: 'resume_continue' });
     },
     [currentConversationActionDisabled, handleSend],
   );
@@ -3059,14 +4022,39 @@ export function ProjectView({
   ]);
 
   const handleSendBoardCommentAttachments = useCallback(
-    async (commentAttachments: ChatCommentAttachment[]) => {
-      if (currentConversationActionDisabled || commentAttachments.length === 0) return;
+    async (commentAttachments: ChatCommentAttachment[], images: File[] = []) => {
+      if (currentConversationQueueDisabled) return false;
+      if (commentAttachments.length === 0 && images.length === 0) return false;
       setWorkspaceFocused(false);
       setCommentInspectorActive(false);
-      await handleSend('', [], commentAttachments);
+      // Upload any attached images once, then queue. Each comment becomes its
+      // own task (so multiple notes => multiple queued tasks); the images ride
+      // along the first task rather than being duplicated across every note.
+      let uploaded: ChatAttachment[] = [];
+      if (images.length > 0) {
+        const result = await uploadProjectFiles(project.id, images);
+        uploaded = result.uploaded;
+      }
+      if (commentAttachments.length === 0) {
+        if (uploaded.length > 0) await handleSend('', uploaded, [], { queueOnly: true });
+        return true;
+      }
+      for (let i = 0; i < commentAttachments.length; i++) {
+        const commentAttachment = commentAttachments[i]!;
+        const savedImages = chatAttachmentsFromPreviewCommentImages(commentAttachment.imageAttachments);
+        const prompt = commentTaskQuery(commentAttachment);
+        await handleSend(
+          prompt,
+          mergeChatAttachments(i === 0 ? uploaded : [], savedImages),
+          [commentTaskContextAttachment(commentAttachment)],
+          { queueOnly: true },
+        );
+      }
+      return true;
     },
-    [handleSend, currentConversationActionDisabled],
+    [handleSend, project.id, currentConversationQueueDisabled],
   );
+  const commentQueueOnSend = currentConversationBusy && !currentConversationQueueDisabled;
 
   const handleContinueRemainingTasks = useCallback(
     (_assistantMessage: ChatMessage, todos: TodoItem[]) => {
@@ -3355,6 +4343,34 @@ export function ProjectView({
     ],
   );
 
+  // "Share to Open Design" — kicks off the bundled `od-share-to-community`
+  // scenario in the active conversation. We just inject the trigger prompt
+  // through the standard chat-send path; the agent then loads SKILL.md and
+  // drives the rest. Keep this preparing state alive for the resulting chat
+  // run so the action reads as async packaging instead of instant sharing.
+  const [shareToOpenDesignBusyMessageId, setShareToOpenDesignBusyMessageId] = useState<string | null>(null);
+  const shareToOpenDesignBusyMessageIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!shareToOpenDesignBusyMessageIdRef.current || currentConversationBusy) return;
+    shareToOpenDesignBusyMessageIdRef.current = null;
+    setShareToOpenDesignBusyMessageId(null);
+  }, [currentConversationBusy]);
+  const handleShareToOpenDesign = useCallback((assistantMessageId: string) => {
+    if (currentConversationActionDisabled || shareToOpenDesignBusyMessageIdRef.current) return;
+    shareToOpenDesignBusyMessageIdRef.current = assistantMessageId;
+    setShareToOpenDesignBusyMessageId(assistantMessageId);
+    void Promise.resolve(handleSend(SHARE_TO_COMMUNITY_PROMPT, [], []))
+      .then((started) => {
+        if (started) return;
+        shareToOpenDesignBusyMessageIdRef.current = null;
+        setShareToOpenDesignBusyMessageId(null);
+      })
+      .catch(() => {
+        shareToOpenDesignBusyMessageIdRef.current = null;
+        setShareToOpenDesignBusyMessageId(null);
+      });
+  }, [currentConversationActionDisabled, handleSend]);
+
   const sentDesignSystemReviewTaskKeysRef = useRef<Set<string>>(new Set());
   const persistDesignSystemReviewEntry = useCallback((
     sectionTitle: string,
@@ -3374,6 +4390,7 @@ export function ProjectView({
     onProjectChange({ ...project, metadata });
     void patchProject(project.id, { metadata });
   }, [onProjectChange, project]);
+
   const sendDesignSystemFeedback = useCallback((
     sectionTitle: string,
     feedback: string,
@@ -3475,32 +4492,6 @@ export function ProjectView({
     },
     [currentConversationActionDisabled, handleSend],
   );
-
-  const handleStop = useCallback(() => {
-    const stoppedAt = Date.now();
-    cancelSendTextBuffer(true);
-    cancelReattachTextBuffers(true);
-    cancelRef.current?.abort();
-    cancelRef.current = null;
-    for (const controller of reattachCancelControllersRef.current.values()) {
-      controller.abort();
-    }
-    reattachCancelControllersRef.current.clear();
-    abortRef.current?.abort();
-    abortRef.current = null;
-    for (const controller of reattachControllersRef.current.values()) {
-      controller.abort();
-    }
-    reattachControllersRef.current.clear();
-    setStreaming(false);
-    streamingConversationIdRef.current = null;
-    setStreamingConversationId(null);
-    setMessages((curr) => {
-      const { messages: next, finalized } = finalizeActiveAssistantMessagesOnStop(curr, stoppedAt);
-      for (const message of finalized) persistMessage(message, { telemetryFinalized: true });
-      return next;
-    });
-  }, [cancelSendTextBuffer, cancelReattachTextBuffers, persistMessage]);
 
   const handleNewConversation = useCallback(async () => {
     if (creatingConversationRef.current) return;
@@ -3627,6 +4618,104 @@ export function ProjectView({
     [project.id],
   );
 
+  const handleConversationSessionModeChange = useCallback(
+    async (id: string, sessionMode: ChatSessionMode) => {
+      setConversations((curr) =>
+        curr.map((conversation) =>
+          conversation.id === id ? { ...conversation, sessionMode } : conversation,
+        ),
+      );
+      const updated = await patchConversation(project.id, id, { sessionMode });
+      if (updated) {
+        setConversations((curr) =>
+          curr.map((conversation) =>
+            conversation.id === id ? { ...conversation, ...updated } : conversation,
+          ),
+        );
+      }
+    },
+    [project.id],
+  );
+
+  const handleActiveConversationSessionModeChange = useCallback(
+    (sessionMode: ChatSessionMode) => {
+      if (!activeConversationId) return;
+      void handleConversationSessionModeChange(activeConversationId, sessionMode);
+    },
+    [activeConversationId, handleConversationSessionModeChange],
+  );
+
+  const handleForkFromMessage = useCallback(
+    async (assistantMessage: ChatMessage) => {
+      if (!activeConversationId || forkingMessageId) return;
+      setForkingMessageId(assistantMessage.id);
+      setConversationLoadError(null);
+      try {
+        const sourceTitle = activeConversation?.title?.trim();
+        const forkTitle = sourceTitle
+          ? t('chat.forkedConversationTitle', { title: sourceTitle })
+          : undefined;
+        // Seed the fork from the messages the user is actually looking at,
+        // up to and including the fork point. A run that errored or had its
+        // connection reset before its assistant message was persisted leaves
+        // that message in memory only; copying from the database by id would
+        // 404 and silently drop the fork. Sending the in-memory snapshot makes
+        // the fork resilient to that gap.
+        const forkIndex = messages.findIndex((m) => m.id === assistantMessage.id);
+        const seedMessages =
+          forkIndex >= 0 ? messages.slice(0, forkIndex + 1) : [...messages, assistantMessage];
+        const fresh = await createConversation(project.id, forkTitle, {
+          seedFromConversationId: activeConversationId,
+          forkAfterMessageId: assistantMessage.id,
+          sessionMode: activeSessionMode,
+          seedMessages,
+        });
+        if (!fresh) throw new Error(t('chat.forkConversationFailed'));
+        setMessages([]);
+        setPreviewComments([]);
+        setAttachedComments([]);
+        setArtifact(null);
+        setStreaming(false);
+        streamingConversationIdRef.current = null;
+        setStreamingConversationId(null);
+        setMessagesConversationId(null);
+        messagesConversationIdRef.current = null;
+        setFailedMessagesConversationId(null);
+        setConversations((curr) => [fresh, ...curr.filter((c) => c.id !== fresh.id)]);
+        setActiveConversationId(fresh.id);
+        navigate(
+          {
+            kind: 'project',
+            projectId: project.id,
+            conversationId: fresh.id,
+            fileName: openTabsState.active ?? null,
+          },
+          { replace: true },
+        );
+        onProjectsRefresh();
+        setError(null);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : t('chat.forkConversationFailed');
+        setConversationLoadError(message);
+        setError(message);
+      } finally {
+        setForkingMessageId(null);
+      }
+    },
+    [
+      activeConversationId,
+      activeConversation?.title,
+      activeSessionMode,
+      forkingMessageId,
+      messages,
+      navigate,
+      onProjectsRefresh,
+      openTabsState.active,
+      project.id,
+      t,
+    ],
+  );
+
   const handleProjectRename = useCallback(
     (newName: string) => {
       const trimmed = newName.trim();
@@ -3649,6 +4738,64 @@ export function ProjectView({
     [project, onProjectChange],
   );
 
+  const handleProjectInstructionsSave = useCallback((nextInstructions: string) => {
+    const trimmed = nextInstructions.trim();
+    const updated: Project = {
+      ...project,
+      customInstructions: trimmed || undefined,
+      updatedAt: Date.now(),
+    };
+    onProjectChange(updated);
+    void patchProject(project.id, { customInstructions: trimmed || null });
+  }, [project, onProjectChange]);
+
+  const activeConversationChatState = useMemo(
+    () =>
+      activeConversationId
+        ? {
+	            conversationId: activeConversationId,
+	            messages,
+	            streaming: currentConversationStreaming,
+	            loading: currentConversationLoading,
+	            sendDisabled: currentConversationSendDisabled,
+            queuedItems: currentConversationQueuedItems,
+            error: conversationLoadError ?? error ?? audioVoiceOptionsError,
+            onSend: handleSend,
+            onRetry: handleRetry,
+            onStop: handleStop,
+            onSubmitForm: (text: string) => {
+              if (currentConversationActionDisabled) return;
+              void handleSend(text, [], []);
+            },
+            onRemoveQueuedSend: removeQueuedChatSend,
+            onUpdateQueuedSend: updateQueuedChatSend,
+            onReorderQueuedSends: reorderCurrentConversationQueuedChatSends,
+            onSendQueuedNow: sendQueuedChatSendNow,
+            onAssistantFeedback: handleAssistantFeedback,
+          }
+        : undefined,
+    [
+      activeConversationId,
+      audioVoiceOptionsError,
+      conversationLoadError,
+      currentConversationActionDisabled,
+	      currentConversationQueuedItems,
+	      currentConversationSendDisabled,
+	      currentConversationLoading,
+	      currentConversationStreaming,
+      error,
+      handleAssistantFeedback,
+      handleRetry,
+      handleSend,
+      handleStop,
+      messages,
+      removeQueuedChatSend,
+      reorderCurrentConversationQueuedChatSends,
+      sendQueuedChatSendNow,
+      updateQueuedChatSend,
+    ],
+  );
+
   const handleChangeDesignSystemId = useCallback(
     (nextId: string | null) => {
       if ((project.designSystemId ?? null) === nextId) return;
@@ -3659,7 +4806,7 @@ export function ProjectView({
       // surfaces. `target_project_kind` derives from
       // `project.metadata.kind`.
       const target =
-        (projectKindToTracking(project.metadata?.kind ?? null) ?? 'unknown') as TrackingDesignSystemApplyTargetKind;
+        (projectKindToTracking(project.metadata?.kind ?? null, project.metadata?.videoModel) ?? 'unknown') as TrackingDesignSystemApplyTargetKind;
       const picked = nextId
         ? designSystems.find((d) => d.id === nextId)
         : null;
@@ -3719,23 +4866,6 @@ export function ProjectView({
     },
     [project, onProjectChange, designSystems, analytics.track],
   );
-
-  const handleSaveInstructions = useCallback(async () => {
-    const value = instructionsDraft.trim() || undefined;
-    // After a save, land on the review panel so the saved value is read
-    // back immediately (#1822); collapse only when it was cleared.
-    const settle = () => setInstructionsMode(value ? 'review' : 'closed');
-    if (value === (project.customInstructions ?? undefined)) {
-      settle();
-      return;
-    }
-    setInstructionsSaving(true);
-    const result = await patchProject(project.id, { customInstructions: value ?? null });
-    setInstructionsSaving(false);
-    if (!result) return;
-    onProjectChange(result);
-    settle();
-  }, [project, onProjectChange, instructionsDraft]);
 
   const projectMeta = useMemo(() => {
     // Design system is rendered by the adjacent picker chip — keep the
@@ -3817,6 +4947,32 @@ export function ProjectView({
     }
   }, [githubConnected, onOpenSettings, designSystemProject, projectFiles]);
 
+  // "Next step" affordance handlers (shown under the last assistant message
+  // once it produced a previewable HTML artifact). Recommended-direction chips
+  // prefill the composer (not auto-send) so the user reviews before sending;
+  // Share reuses the preview workspace's existing Share/Export menu. There is
+  // deliberately no generic "continue editing" / "optimize visuals" action —
+  // free-form follow-ups belong in the composer and the visual directions are
+  // already covered by the concrete chips, so vague catch-alls only added noise.
+  const handleArtifactChip = useCallback((_fileName: string | null, prompt: string) => {
+    setComposerDraftSignal({ text: prompt, nonce: Date.now() });
+  }, []);
+  const handleArtifactShare = useCallback(
+    (fileName: string) => {
+      requestOpenFile(fileName);
+      setShareRequest({ name: fileName, nonce: Date.now() });
+    },
+    [requestOpenFile],
+  );
+
+  const handleBrowserUsePrompt = useCallback((text: string) => {
+    setWorkspaceFocused(false);
+    setComposerDraftSignal({
+      text,
+      nonce: Date.now(),
+    });
+  }, []);
+
   const isDeck = useMemo(
     () =>
       (skills.find((s) => s.id === project.skillId) ??
@@ -3828,24 +4984,32 @@ export function ProjectView({
     workspacePanelMinWidth === 0
       ? 'minmax(0, 1fr)'
       : `minmax(${workspacePanelMinWidth}px, 1fr)`;
+  const splitLeftPanelWidth = leftInspectorActive
+    ? COMMENT_INSPECTOR_PANEL_WIDTH
+    : chatPanelWidthRef.current;
   const chatPanelAriaMinWidth = Math.min(MIN_CHAT_PANEL_WIDTH, chatPanelMaxWidth);
 
   const renderPreferredChatPanelWidth = useCallback((
     preferredWidth: number,
     maxWidth = chatPanelMaxWidthRef.current,
+    options: { commitState?: boolean } = {},
   ): number => {
     const next = clampChatPanelWidth(preferredWidth, maxWidth);
     chatPanelWidthRef.current = next;
-    setChatPanelWidth(next);
+    applySplitChatPanelWidth(splitRef.current, next, workspacePanelTrack);
+    if (options.commitState !== false) setChatPanelWidth(next);
     return next;
-  }, []);
+  }, [workspacePanelTrack]);
 
-  const applyChatPanelWidth = useCallback((width: number): number => {
+  const applyChatPanelWidth = useCallback((
+    width: number,
+    options: { commitState?: boolean } = {},
+  ): number => {
     const nextPreferred = clampPreferredChatPanelWidth(
       clampChatPanelWidth(width, chatPanelMaxWidthRef.current),
     );
     preferredChatPanelWidthRef.current = nextPreferred;
-    return renderPreferredChatPanelWidth(nextPreferred);
+    return renderPreferredChatPanelWidth(nextPreferred, chatPanelMaxWidthRef.current, options);
   }, [renderPreferredChatPanelWidth]);
 
   const finishChatPanelResize = useCallback((saveFinalWidth = true) => {
@@ -3858,12 +5022,16 @@ export function ProjectView({
     pendingPointerClientXRef.current = null;
     resizeStateRef.current = null;
     setResizingChatPanel(false);
-    if (saveFinalWidth) saveChatPanelWidth(preferredChatPanelWidthRef.current);
-  }, []);
+    if (saveFinalWidth) {
+      const finalWidth = renderPreferredChatPanelWidth(preferredChatPanelWidthRef.current);
+      saveChatPanelWidth(finalWidth);
+    }
+  }, [renderPreferredChatPanelWidth]);
 
   useEffect(() => {
     chatPanelWidthRef.current = chatPanelWidth;
-  }, [chatPanelWidth]);
+    applySplitChatPanelWidth(splitRef.current, chatPanelWidth, workspacePanelTrack);
+  }, [chatPanelWidth, workspacePanelTrack]);
 
   useEffect(() => {
     chatPanelMaxWidthRef.current = chatPanelMaxWidth;
@@ -3915,7 +5083,7 @@ export function ProjectView({
       if (delta === 0 && !state.hasMoved) return;
       state.hasMoved = true;
       const rawWidth = state.startWidth + (state.isRtl ? -delta : delta);
-      applyChatPanelWidth(rawWidth);
+      applyChatPanelWidth(rawWidth, { commitState: false });
     };
 
     const flushPendingPointerMove = () => {
@@ -4128,6 +5296,10 @@ export function ProjectView({
   // the project switches away mid-flight to avoid setState-on-unmount.
   const [activePluginSnapshot, setActivePluginSnapshot] =
     useState<AppliedPluginSnapshot | null>(null);
+  const [contextPluginDetails, setContextPluginDetails] =
+    useState<InstalledPluginRecord | null>(null);
+  const [contextDesignSystemDetails, setContextDesignSystemDetails] =
+    useState<DesignSystemSummary | null>(null);
   useEffect(() => {
     const snapshotId = project.appliedPluginSnapshotId;
     if (!snapshotId) {
@@ -4143,6 +5315,13 @@ export function ProjectView({
       cancelled = true;
     };
   }, [project.appliedPluginSnapshotId]);
+  const handleOpenContextPluginDetails = useCallback(async (pluginId: string) => {
+    const normalizedId = pluginId.trim();
+    if (!normalizedId) return;
+    const plugins = await listPlugins({ includeHidden: true });
+    const record = plugins.find((plugin) => plugin.id === normalizedId);
+    if (record) setContextPluginDetails(record);
+  }, []);
   const chatDesignSystemSummary = useMemo(() => {
     if (activeDesignSystemSummary) return activeDesignSystemSummary;
     const designSystemName = activePluginSnapshot?.inputs?.designSystem;
@@ -4257,9 +5436,50 @@ export function ProjectView({
   // pipeline; this hook only governs whether the web layer renders the
   // resulting SSE stream.
   const critiqueTheaterEnabled = useCritiqueTheaterEnabled();
-  const projectInstructions = (project.customInstructions ?? '').trim();
-  const hasProjectInstructions = projectInstructions.length > 0;
-  const projectInstructionsPreview = compactInlinePreview(projectInstructions);
+
+  // CLI / agent selector lives below the chat conversation (composer footer),
+  // not in the top-right header.
+  const executionControls = (
+    <AvatarMenu
+      config={config}
+      agents={agents}
+      daemonLive={daemonLive}
+      onModeChange={onModeChange}
+      onOpen={() => {
+        trackComposerBarClick(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          element: 'agent_selector_open',
+          ...(project?.id ? { project_id: project.id } : {}),
+        });
+      }}
+      onAgentChange={(id) => {
+        trackComposerBarClick(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          element: 'agent_select',
+          agent_id: id,
+          ...(project?.id ? { project_id: project.id } : {}),
+        });
+        onAgentChange(id);
+      }}
+      onAgentModelChange={(agentId, choice) => {
+        trackComposerBarClick(analytics.track, {
+          page_name: 'chat_panel',
+          area: 'chat_composer',
+          element: 'agent_model_select',
+          agent_id: agentId,
+          ...(choice?.model ? { model_id: choice.model } : {}),
+          ...(project?.id ? { project_id: project.id } : {}),
+        });
+        onAgentModelChange(agentId, choice);
+      }}
+      onOpenSettings={onOpenSettings}
+      onRefreshAgents={onRefreshAgents}
+      onBack={onBack}
+      placement="up"
+    />
+  );
 
   return (
     <div className="app">
@@ -4267,153 +5487,6 @@ export function ProjectView({
         projectId={project.id}
         enabled={critiqueTheaterEnabled}
       />
-      <AppChromeHeader
-        showTrafficSpace={false}
-        onBack={onBack}
-        backLabel={t('project.backToProjects')}
-        fileActionsBefore={(
-          <div
-            className="app-chrome-file-actions-before workspace-tabs-file-actions"
-            data-app-chrome-file-actions="true"
-          />
-        )}
-        actions={(
-          <>
-            <button
-              type="button"
-              className="settings-icon-btn"
-              data-testid="project-settings-trigger"
-              title={t('project.customInstructions')}
-              aria-label={t('project.customInstructions')}
-              aria-expanded={instructionsMode !== 'closed'}
-              onClick={() => {
-                setInstructionsDraft(project.customInstructions ?? '');
-                setInstructionsMode(hasProjectInstructions ? 'review' : 'edit');
-              }}
-            >
-              <Icon name="sliders" size={16} />
-            </button>
-            <HandoffButton projectId={project.id} />
-            <AvatarMenu
-              config={config}
-              agents={agents}
-              daemonLive={daemonLive}
-              onModeChange={onModeChange}
-              onAgentChange={onAgentChange}
-              onAgentModelChange={onAgentModelChange}
-              onOpenSettings={onOpenSettings}
-              onRefreshAgents={onRefreshAgents}
-              onBack={onBack}
-            />
-          </>
-        )}
-      >
-        <div className="app-project-title">
-          <span className="app-project-title-line">
-            <span
-              className="title editable"
-              data-testid="project-title"
-              title={project.name}
-              tabIndex={0}
-              role="textbox"
-              suppressContentEditableWarning
-              contentEditable
-              onBlur={(e) => handleProjectRename(e.currentTarget.textContent ?? '')}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  (e.currentTarget as HTMLElement).blur();
-                }
-              }}
-            >
-              {project.name}
-            </span>
-            {projectMeta !== t('project.metaFreeform') ? (
-              <span className="meta" data-testid="project-meta">{projectMeta}</span>
-            ) : null}
-            <ProjectDesignSystemPicker
-              designSystems={designSystems}
-              selectedId={project.designSystemId ?? null}
-              onChange={handleChangeDesignSystemId}
-            />
-            {hasProjectInstructions ? (
-              <button
-                type="button"
-                className={`project-instructions-chip${instructionsMode !== 'closed' ? ' is-open' : ''}`}
-                data-testid="project-instructions-chip"
-                title={projectInstructions}
-                aria-label={t('project.customInstructions')}
-                aria-expanded={instructionsMode !== 'closed'}
-                onClick={() => setInstructionsMode((m) => (m === 'closed' ? 'review' : 'closed'))}
-              >
-                <Icon name="sliders" size={11} />
-                <span>&quot;{projectInstructionsPreview}&quot;</span>
-              </button>
-            ) : null}
-          </span>
-        </div>
-      </AppChromeHeader>
-      {instructionsMode === 'review' && (
-        <div className="project-instructions-bar project-instructions-review">
-          <div className="project-instructions-bar-head">
-            <label className="project-instructions-label">{t('project.customInstructions')}</label>
-            <span className="project-instructions-status">
-              <Icon name="check" size={11} />
-              {t('project.instructionsActive')}
-            </span>
-          </div>
-          <div className="project-instructions-preview" data-testid="project-instructions-preview">
-            {project.customInstructions}
-          </div>
-          <div className="project-instructions-actions">
-            <button
-              type="button"
-              className="btn-sm"
-              onClick={() => setInstructionsMode('closed')}
-            >
-              {t('common.close')}
-            </button>
-            <button
-              type="button"
-              className="btn-sm btn-primary"
-              data-testid="project-instructions-edit"
-              onClick={() => {
-                setInstructionsDraft(project.customInstructions ?? '');
-                setInstructionsMode('edit');
-              }}
-            >
-              {t('common.edit')}
-            </button>
-          </div>
-        </div>
-      )}
-      {instructionsMode === 'edit' && (
-        <div className="project-instructions-bar">
-          <label className="project-instructions-label">{t('project.customInstructions')}</label>
-          <textarea
-            className="project-instructions-input"
-            data-testid="project-instructions-textarea"
-            rows={3}
-            maxLength={5000}
-            placeholder={t('project.customInstructionsPlaceholder')}
-            value={instructionsDraft}
-            onChange={(e) => setInstructionsDraft(e.target.value)}
-            disabled={instructionsSaving}
-            autoFocus
-          />
-          <div className="project-instructions-actions">
-            <button type="button" className="btn-sm" disabled={instructionsSaving} onClick={() => {
-              setInstructionsDraft(project.customInstructions ?? '');
-              setInstructionsMode((project.customInstructions ?? '').trim() ? 'review' : 'closed');
-            }}>
-              {t('common.cancel')}
-            </button>
-            <button type="button" className="btn-sm btn-primary" data-testid="project-instructions-save" disabled={instructionsSaving} onClick={handleSaveInstructions}>
-              {t('common.save')}
-            </button>
-          </div>
-        </div>
-      )}
       {/* ProjectActionsToolbar removed per 00efdcba — hide finalize-design
           toolbar from project header. Restore from cf1cd9bb if product
           wants the Finalize + Continue-in-CLI buttons back in the chrome. */}
@@ -4424,12 +5497,7 @@ export function ProjectView({
           leftInspectorActive && !workspaceFocused ? 'split-manual-edit' : '',
           resizingChatPanel && !workspaceFocused ? 'is-resizing-chat' : '',
         ].filter(Boolean).join(' ')}
-        style={workspaceFocused
-          ? undefined
-          : {
-              gridTemplateColumns:
-                `${chatPanelWidth}px ${SPLIT_RESIZE_HANDLE_WIDTH}px ${workspacePanelTrack}`,
-            }}
+        style={projectSplitStyle(workspaceFocused, splitLeftPanelWidth, workspacePanelTrack)}
       >
         <div className="split-chat-slot" hidden={workspaceFocused}>
           {commentInspectorActive ? (
@@ -4445,12 +5513,17 @@ export function ProjectView({
               key={`${project.id}:${activeConversationId ?? 'conversation-unavailable'}:${chatSeed?.id ?? 'ready'}`}
               messages={messages}
               streaming={currentConversationStreaming}
+              liveToolInput={liveToolInput}
+              loading={currentConversationLoading}
               sendDisabled={currentConversationSendDisabled}
               queuedItems={currentConversationQueuedItems}
               error={conversationLoadError ?? error ?? audioVoiceOptionsError}
               projectId={project.id}
-              projectKindForTracking={projectKindToTracking(project.metadata?.kind)}
+              sessionMode={activeSessionMode}
+              onSessionModeChange={handleActiveConversationSessionModeChange}
+              projectKindForTracking={projectKindToTracking(project.metadata?.kind, project.metadata?.videoModel)}
               projectFiles={projectFiles}
+              activeProjectFileName={activeProjectFileName}
               hasActiveDesignSystem={!!project.designSystemId}
               activeDesignSystem={chatDesignSystemSummary}
               projectFileNames={projectFileNames}
@@ -4463,34 +5536,61 @@ export function ProjectView({
               onDeleteComment={(commentId) => void removePreviewComment(commentId)}
               onSend={handleSend}
               onRetry={handleRetry}
+              onResumeRun={handleResumeRun}
               onStop={handleStop}
               onRemoveQueuedSend={removeQueuedChatSend}
               onUpdateQueuedSend={updateQueuedChatSend}
+              onReorderQueuedSends={reorderCurrentConversationQueuedChatSends}
               onSendQueuedNow={sendQueuedChatSendNow}
               onRequestOpenFile={requestOpenFile}
+              onRequestPluginDetails={handleOpenContextPluginDetails}
+              onRequestDesignSystemDetails={setContextDesignSystemDetails}
               onRequestPluginFolderAgentAction={handlePluginFolderAgentAction}
               activePluginActionPaths={activePluginActionPaths}
               hiddenPluginActionPaths={hiddenAssistantPluginActionPaths}
+              onShareToOpenDesign={handleShareToOpenDesign}
+              shareToOpenDesignBusyMessageId={shareToOpenDesignBusyMessageId}
               forceStreamingMessageIds={forceStreamingPluginMessageIds}
               initialDraft={chatInitialDraft}
               onSubmitForm={(text) => {
                 if (currentConversationActionDisabled) return;
                 void handleSend(text, [], []);
               }}
+              onOpenQuestions={openQuestionsTab}
               onContinueRemainingTasks={handleContinueRemainingTasks}
               onAssistantFeedback={handleAssistantFeedback}
+              onArtifactShare={handleArtifactShare}
+              onArtifactChip={handleArtifactChip}
+              onForkFromMessage={handleForkFromMessage}
+              forkingMessageId={forkingMessageId}
               onNewConversation={handleNewConversation}
               newConversationDisabled={newConversationDisabled}
               conversations={conversations}
               activeConversationId={activeConversationId}
+              messagesConversationId={messagesConversationId}
               onSelectConversation={handleSelectConversation}
               onDeleteConversation={handleDeleteConversation}
-              onRenameConversation={handleRenameConversation}
+              config={config}
               onOpenSettings={onOpenSettings}
+              showByokRecoveryAction={
+                config.mode === 'api' &&
+                daemonLive &&
+                (
+                  !config.apiKey.trim() ||
+                  !config.baseUrl.trim() ||
+                  !config.model.trim()
+                )
+              }
+              onSwitchToLocalCli={() => {
+                setError(null);
+                onModeChange('daemon');
+              }}
               onOpenAmrSettings={onOpenAmrSettings}
               onSwitchToAmrAndRetry={handleSwitchToAmrAndRetry}
               onLaunchAntigravityOauth={handleLaunchAntigravityOauth}
               onOpenMcpSettings={onOpenMcpSettings}
+              onBrowsePlugins={onBrowsePlugins}
+              onOpenConnectors={onOpenConnectors}
               connectRepoNeeded={connectRepoNeeded}
               githubConnected={githubConnected}
               onConnectRepo={handleConnectRepo}
@@ -4503,16 +5603,72 @@ export function ProjectView({
               byokApiProtocol={config.apiProtocol}
               byokImageModel={byokImageModelOverride}
               onChangeByokImageModel={setByokImageModelOverride}
+              byokVideoModel={byokVideoModelOverride}
+              onChangeByokVideoModel={setByokVideoModelOverride}
+              byokSpeechModel={byokSpeechModelOverride}
+              onChangeByokSpeechModel={setByokSpeechModelOverride}
+              byokSpeechVoice={byokSpeechVoiceOverride}
+              onChangeByokSpeechVoice={setByokSpeechVoiceOverride}
               projectMetadata={project.metadata}
               onProjectMetadataChange={(metadata) => {
                 onProjectChange({ ...project, metadata });
               }}
+              activeWorkspaceContext={activeWorkspaceContext}
+              workspaceContexts={workspaceContexts}
               currentSkillId={project.skillId}
               onProjectSkillChange={(skillId) => {
                 onProjectChange({ ...project, skillId });
               }}
               activePluginSnapshot={activePluginSnapshot}
-              onCollapse={() => setWorkspaceFocused(true)}
+              currentDesignSystemId={project.designSystemId}
+              onActiveDesignSystemChange={(updatedProject) => {
+                onProjectChange(updatedProject);
+              }}
+              onShowToast={(message) => {
+                setProjectActionsToast({ message, details: null });
+              }}
+              onBack={onBack}
+              backLabel={t('project.backToProjects')}
+              composerFooterAccessory={executionControls}
+              composerLeadingAccessory={(
+                <ProjectInstructionsControl
+                  instructions={project.customInstructions ?? ''}
+                  onSave={handleProjectInstructionsSave}
+                  t={t}
+                />
+              )}
+              projectHeader={(
+                <span className="chat-project-title-line">
+                  <span
+                    className="title editable"
+                    data-testid="project-title"
+                    title={project.name}
+                    tabIndex={0}
+                    role="textbox"
+                    suppressContentEditableWarning
+                    contentEditable
+                    onBlur={(e) => handleProjectRename(e.currentTarget.textContent ?? '')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLElement).blur();
+                      }
+                    }}
+                  >
+                    {project.name}
+                  </span>
+                  {projectMeta !== t('project.metaFreeform') ? (
+                    <span className="meta" data-testid="project-meta">{projectMeta}</span>
+                  ) : null}
+                </span>
+              )}
+              designSystemPicker={(
+                <DesignSystemPicker
+                  designSystems={designSystems}
+                  selectedId={project.designSystemId ?? null}
+                  onChange={handleChangeDesignSystemId}
+                />
+              )}
             />
           ) : (
             <div className="pane" data-testid="chat-pane-loading">
@@ -4542,7 +5698,16 @@ export function ProjectView({
         ) : null}
         <FileWorkspace
           projectId={project.id}
-          projectKind={projectKindToTracking(project.metadata?.kind) ?? 'prototype'}
+          projectKind={projectKindToTracking(project.metadata?.kind, project.metadata?.videoModel) ?? 'prototype'}
+          rootDirName={(() => {
+            const baseDir =
+              projectDetail.project?.metadata?.baseDir ?? project.metadata?.baseDir;
+            return typeof baseDir === 'string'
+              ? baseDir.split(/[/\\]/).filter(Boolean).pop()
+              : undefined;
+          })()}
+          reloading={false}
+          resolvedDir={projectDetail.resolvedDir}
           files={projectFiles}
           liveArtifacts={liveArtifacts}
           filesRefreshKey={filesRefresh}
@@ -4552,7 +5717,11 @@ export function ProjectView({
           isDeck={isDeck}
           onExportAsPptx={handleExportAsPptx}
           streaming={currentConversationActionDisabled}
+          commentQueueOnSend={commentQueueOnSend}
+          commentSendDisabled={currentConversationQueueDisabled}
           openRequest={openRequest}
+          shareRequest={shareRequest}
+          slideNavRequest={slideNavRequest}
           liveArtifactEvents={liveArtifactEvents}
           designSystemActivityEvents={designSystemActivityEvents}
           tabsState={openTabsState}
@@ -4561,8 +5730,11 @@ export function ProjectView({
           onSavePreviewComment={savePreviewComment}
           onRemovePreviewComment={removePreviewComment}
           onSendBoardCommentAttachments={handleSendBoardCommentAttachments}
+          onRequestBrowserUsePrompt={handleBrowserUsePrompt}
           onPluginFolderAgentAction={handlePluginFolderAgentAction}
           activePluginActionPaths={activePluginActionPaths}
+          preferredPreviewFile={project.metadata?.entryFile ?? null}
+          autoPreviewDesignArtifacts={project.metadata?.importedFrom === 'folder'}
           focusMode={workspaceFocused}
           onFocusModeChange={setWorkspaceFocused}
           designSystemProject={designSystemProject}
@@ -4576,17 +5748,177 @@ export function ProjectView({
           githubConnected={githubConnected}
           commentPortalId={commentInspectorPortalId}
           onCommentModeChange={setCommentInspectorActive}
+          chatConfig={config}
+          chatAgentsById={agentsById}
+          chatLocale={locale}
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelectConversation={handleSelectConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onRenameConversation={handleRenameConversation}
+          onConversationSessionModeChange={handleConversationSessionModeChange}
+          onNewConversation={handleNewConversation}
+          activeConversationChat={activeConversationChatState}
+          onActiveContextChange={handleActiveWorkspaceContextChange}
+          onWorkspaceContextsChange={handleWorkspaceContextsChange}
+          messages={messages}
+          artifactHtml={artifact?.html}
+          conversationError={error}
+          onRetry={handleRetry}
+          onAuthorizeAndRetry={handleSwitchToAmrAndRetry}
+          onLaunchTerminalAuth={handleLaunchAntigravityOauth}
+          conversationId={activeConversationId}
+          headerActions={(
+            <>
+              <HandoffButton
+                projectId={project.id}
+                projectName={project.name}
+                projectDir={projectDetail.resolvedDir}
+                agents={agents}
+                artifactId={headerArtifact.artifact_id}
+                artifactKind={headerArtifact.artifact_kind}
+              />
+              <EntrySettingsMenu
+                config={config}
+                onThemeChange={handleThemeChange}
+                onOpenSettings={onOpenSettings}
+                onTrackTriggerClick={() => {
+                  // Spec row 52: the settings gear in the artifact header.
+                  // Carry the active artifact so settings slices line up with
+                  // the rest of the artifact_header funnel.
+                  trackArtifactHeaderClick(analytics.track, {
+                    page_name: 'artifact',
+                    area: 'artifact_header',
+                    element: 'settings',
+                    ...headerArtifact,
+                  });
+                }}
+              />
+            </>
+          )}
+          questionForm={displayedQuestionForm}
+          questionFormPreview={displayedQuestionFormPreview}
+          questionFormKey={displayedQuestionFormKey}
+          questionFormInteractive={displayedQuestionFormActive}
+          questionFormSubmitDisabled={currentConversationActionDisabled}
+          questionFormSubmittedAnswers={displayedQuestionFormSubmittedAnswers}
+          questionsGenerating={displayedQuestionsGenerating}
+          focusQuestionsRequest={focusQuestionsRequest}
+          onSubmitQuestionForm={(text) => {
+            if (currentConversationActionDisabled) return;
+            void handleSend(text, [], []);
+          }}
         />
       </div>
-      {projectActionsToast ? (
-        <Toast
-          message={projectActionsToast.message}
-          details={projectActionsToast.details}
-          code={projectActionsToast.code}
-          onDismiss={() => setProjectActionsToast(null)}
+      {contextPluginDetails ? (
+        <PluginDetailsModal
+          record={contextPluginDetails}
+          onClose={() => setContextPluginDetails(null)}
+          onUse={() => setContextPluginDetails(null)}
+          isApplying={false}
+          hideUseAction
         />
       ) : null}
+      {contextDesignSystemDetails ? (
+        <DesignSystemPreviewModal
+          system={contextDesignSystemDetails}
+          onClose={() => setContextDesignSystemDetails(null)}
+        />
+      ) : null}
+      <AnimatePresence>
+        {projectActionsToast ? (
+          <Toast
+            message={projectActionsToast.message}
+            details={projectActionsToast.details}
+            code={projectActionsToast.code}
+            onDismiss={() => setProjectActionsToast(null)}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
+  );
+}
+
+function ProjectInstructionsControl({
+  instructions,
+  onSave,
+  t,
+}: {
+  instructions: string;
+  onSave: (instructions: string) => void;
+  t: ReturnType<typeof useI18n>['t'];
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(instructions);
+
+  useEffect(() => {
+    if (!editing) setDraft(instructions);
+  }, [editing, instructions]);
+
+  if (!editing && instructions.trim().length > 0) {
+    return (
+      <div className="project-instructions project-instructions--saved">
+        <button
+          type="button"
+          className="project-instructions__preview"
+          onClick={() => setEditing(true)}
+          data-testid="project-instructions-preview"
+        >
+          {instructions}
+        </button>
+      </div>
+    );
+  }
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="project-instructions__add"
+        onClick={() => setEditing(true)}
+        data-testid="project-instructions-add"
+      >
+        {t('project.customInstructions')}
+      </button>
+    );
+  }
+
+  return (
+    <form
+      className="project-instructions project-instructions--editing"
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(draft);
+        setEditing(false);
+      }}
+    >
+      <textarea
+        className="project-instructions__textarea"
+        value={draft}
+        onChange={(event) => setDraft(event.currentTarget.value)}
+        placeholder={t('project.customInstructionsPlaceholder')}
+        data-testid="project-instructions-textarea"
+      />
+      <div className="project-instructions__actions">
+        <button
+          type="button"
+          className="project-instructions__button"
+          onClick={() => {
+            setDraft(instructions);
+            setEditing(false);
+          }}
+        >
+          {t('common.cancel')}
+        </button>
+        <button
+          type="submit"
+          className="project-instructions__button project-instructions__button--primary"
+          data-testid="project-instructions-save"
+        >
+          {t('common.save')}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -4723,14 +6055,62 @@ function isActiveRunStatus(status: ChatMessage['runStatus']): boolean {
   return status === 'queued' || status === 'running';
 }
 
-function compactInlinePreview(value: string): string {
-  return value.replace(/\s+/g, ' ').trim();
+const QUEUED_CHAT_SENDS_STORAGE_VERSION = 1;
+
+function queuedChatSendsStorageKey(projectId: string): string {
+  return `od:chat-queued-sends:${projectId}:v${QUEUED_CHAT_SENDS_STORAGE_VERSION}`;
+}
+
+function loadQueuedChatSends(projectId: string): QueuedChatSend[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(queuedChatSendsStorageKey(projectId));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isQueuedChatSend).slice(0, 100);
+  } catch {
+    return [];
+  }
+}
+
+function saveQueuedChatSends(projectId: string, items: QueuedChatSend[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = queuedChatSendsStorageKey(projectId);
+    if (items.length === 0) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, JSON.stringify(items.slice(0, 100)));
+  } catch {
+    // Ignore private-mode/quota failures. The in-memory queue still works.
+  }
+}
+
+function isQueuedChatSend(value: unknown): value is QueuedChatSend {
+  if (typeof value !== 'object' || value == null || Array.isArray(value)) return false;
+  const record = value as Partial<QueuedChatSend>;
+  return (
+    typeof record.id === 'string' &&
+    typeof record.conversationId === 'string' &&
+    typeof record.prompt === 'string' &&
+    Array.isArray(record.attachments) &&
+    Array.isArray(record.commentAttachments) &&
+    typeof record.createdAt === 'number'
+  );
+}
+
+function stripQueueOnlyFromMeta(meta: ChatSendMeta | undefined): ProjectChatSendMeta | undefined {
+  if (!meta) return undefined;
+  const { queueOnly: _queueOnly, ...rest } = meta;
+  return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
 export interface RetryTarget {
   failedAssistant: ChatMessage;
   userMsg: ChatMessage;
   priorMessages: ChatMessage[];
+  preservedAttempts: ChatMessage[];
 }
 
 export function resolveRetryTarget(
@@ -4745,14 +6125,24 @@ export function resolveRetryTarget(
   );
   if (failedIndex <= 0 || failedIndex !== messages.length - 1) return null;
 
-  const userMsg = messages[failedIndex - 1];
+  let userIndex = failedIndex - 1;
+  while (
+    userIndex >= 0 &&
+    messages[userIndex]?.role === 'assistant' &&
+    messages[userIndex]?.runStatus === 'failed'
+  ) {
+    userIndex -= 1;
+  }
+
+  const userMsg = messages[userIndex];
   const failedAssistant = messages[failedIndex];
   if (!userMsg || userMsg.role !== 'user' || !failedAssistant) return null;
 
   return {
     failedAssistant,
     userMsg,
-    priorMessages: messages.slice(0, failedIndex - 1),
+    priorMessages: messages.slice(0, userIndex),
+    preservedAttempts: messages.slice(userIndex + 1, failedIndex + 1),
   };
 }
 
@@ -4910,7 +6300,7 @@ export function computeProducedFiles(
 ): ProjectFile[] | undefined {
   if (!beforeNames) return undefined;
   const set = beforeNames instanceof Set ? beforeNames : new Set(beforeNames);
-  return next.filter((f) => !set.has(f.name));
+  return filterImplicitProducedFiles(next.filter((f) => !set.has(f.name)));
 }
 
 // Reattach with a recovered (on-disk) artifact must still include any
@@ -4968,7 +6358,7 @@ export function finalizeActiveAssistantMessagesOnStop(
 
 type BufferedTextUpdates = ReturnType<typeof createBufferedTextUpdates>;
 
-function createBufferedTextUpdates({
+export function createBufferedTextUpdates({
   updateMessage,
   persistSoon,
   flushAndPersistNow,
@@ -5107,5 +6497,10 @@ function createBufferedTextUpdates({
     window.addEventListener('pagehide', onPageHide);
   }
 
-  return { appendContent, appendTextEvent, appendEvent, flush, cancel };
+  // True when text has been appended but not yet flushed into a `text` event.
+  // Callers that need the soon-to-be-committed event count (e.g. pinning a live
+  // tool's stream position) add 1 for this still-buffered preamble.
+  const hasPendingText = () => pendingTextEventDelta.length > 0;
+
+  return { appendContent, appendTextEvent, appendEvent, flush, cancel, hasPendingText };
 }

@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, join, mkdtempSync, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
+  AGENT_DEFS, assert, chmodSync, codex, cursorAgent, detectAgents, grokBuild, join, mkdtempSync, rmSync, tmpdir, withEnvSnapshot, withPlatform, writeFileSync,
 } from './helpers/test-helpers.js';
 import { codexNeedsDangerFullAccessSandbox } from '../../src/runtimes/defs/codex.js';
 import { readLocalAgentProfileDefs } from '../../src/runtimes/registry.js';
@@ -102,34 +102,63 @@ test('local agent profiles skip explicit unknown baseAgent without falling back'
   }
 });
 
+test('sandbox mode ignores implicit and host explicit local agent profiles', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'od-local-agent-profiles-sandbox-'));
+  try {
+    await withEnvSnapshot(['OD_AGENT_PROFILES_CONFIG', 'OD_SANDBOX_MODE', 'OD_DATA_DIR'], async () => {
+      const config = join(dir, 'agents.local.json');
+      writeFileSync(
+        config,
+        JSON.stringify({
+          agents: [{ id: 'explicit-wrapper', bin: 'explicit-wrapper' }],
+        }),
+      );
+
+      process.env.OD_SANDBOX_MODE = '1';
+      delete process.env.OD_DATA_DIR;
+      delete process.env.OD_AGENT_PROFILES_CONFIG;
+      assert.deepEqual(readLocalAgentProfileDefs(), []);
+
+      process.env.OD_AGENT_PROFILES_CONFIG = config;
+      assert.deepEqual(readLocalAgentProfileDefs(), []);
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('codex args disable plugins when OD_CODEX_DISABLE_PLUGINS is 1', () => {
-  process.env.OD_CODEX_DISABLE_PLUGINS = '1';
+  withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX'], () => {
+    process.env.OD_CODEX_DISABLE_PLUGINS = '1';
+    delete process.env.OD_CODEX_SANDBOX;
 
-  withPlatform('darwin', () => {
-    const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+    withPlatform('darwin', () => {
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
 
-    assert.deepEqual(args.slice(0, 11), [
-      'exec',
-      '--json',
-      '--skip-git-repo-check',
-      '--sandbox',
-      'workspace-write',
-      '-c',
-      'sandbox_workspace_write.network_access=true',
-      '-c',
-      'default_permissions=":workspace"',
-      '--disable',
-      'plugins',
-    ]);
+      assert.deepEqual(args.slice(0, 11), [
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--sandbox',
+        'workspace-write',
+        '-c',
+        'sandbox_workspace_write.network_access=true',
+        '-c',
+        'default_permissions=":workspace"',
+        '--disable',
+        'plugins',
+      ]);
+    });
   });
 });
 
 test('codex args use workspace-write sandbox on macOS and Linux', () => {
-  delete process.env.OD_CODEX_DISABLE_PLUGINS;
+  withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX', 'WSL_DISTRO_NAME'], () => {
+    delete process.env.OD_CODEX_DISABLE_PLUGINS;
+    delete process.env.OD_CODEX_SANDBOX;
 
-  for (const platform of ['darwin', 'linux'] as const) {
-    withPlatform(platform, () => {
-      withEnvSnapshot(['WSL_DISTRO_NAME'], () => {
+    for (const platform of ['darwin', 'linux'] as const) {
+      withPlatform(platform, () => {
         delete process.env.WSL_DISTRO_NAME;
         const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
         assert.equal(args.includes('--full-auto'), false);
@@ -149,15 +178,15 @@ test('codex args use workspace-write sandbox on macOS and Linux', () => {
           true,
         );
       });
-    });
-  }
+    }
+  });
 });
 
 test('codex args use danger-full-access sandbox on WSL because workspace-write stays read-only', () => {
-  delete process.env.OD_CODEX_DISABLE_PLUGINS;
-
   withPlatform('linux', () => {
-    withEnvSnapshot(['WSL_DISTRO_NAME'], () => {
+    withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX', 'WSL_DISTRO_NAME'], () => {
+      delete process.env.OD_CODEX_DISABLE_PLUGINS;
+      delete process.env.OD_CODEX_SANDBOX;
       process.env.WSL_DISTRO_NAME = 'Ubuntu';
       assert.equal(codexNeedsDangerFullAccessSandbox('linux', process.env), true);
       const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
@@ -173,6 +202,50 @@ test('codex args use danger-full-access sandbox on WSL because workspace-write s
   });
 });
 
+test('codex args allow OD_CODEX_SANDBOX danger-full-access override on Linux', () => {
+  withPlatform('linux', () => {
+    withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX', 'WSL_DISTRO_NAME'], () => {
+      delete process.env.OD_CODEX_DISABLE_PLUGINS;
+      process.env.OD_CODEX_SANDBOX = 'danger-full-access';
+      delete process.env.WSL_DISTRO_NAME;
+
+      assert.equal(codexNeedsDangerFullAccessSandbox('linux', process.env), true);
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+      assert.deepEqual(args.slice(0, 5), [
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--sandbox',
+        'danger-full-access',
+      ]);
+      assert.equal(
+        args.includes('sandbox_workspace_write.network_access=true'),
+        false,
+      );
+    });
+  });
+});
+
+test('codex args ignore unknown OD_CODEX_SANDBOX values', () => {
+  withPlatform('linux', () => {
+    withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX', 'WSL_DISTRO_NAME'], () => {
+      delete process.env.OD_CODEX_DISABLE_PLUGINS;
+      process.env.OD_CODEX_SANDBOX = 'workspace-write';
+      delete process.env.WSL_DISTRO_NAME;
+
+      assert.equal(codexNeedsDangerFullAccessSandbox('linux', process.env), false);
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+      assert.deepEqual(args.slice(0, 5), [
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--sandbox',
+        'workspace-write',
+      ]);
+    });
+  });
+});
+
 test('codex args use danger-full-access sandbox on Windows because workspace-write blocks PowerShell', () => {
   // Codex CLI's workspace-write sandbox mode on Windows lacks a working
   // OS-level sandbox and falls back to a policy that rejects shell
@@ -180,48 +253,57 @@ test('codex args use danger-full-access sandbox on Windows because workspace-wri
   // The agent cannot list files or run any shell-backed tool under that
   // policy. danger-full-access is Codex CLI's documented Windows-compatible
   // mode (issue #1721).
-  delete process.env.OD_CODEX_DISABLE_PLUGINS;
+  withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX'], () => {
+    delete process.env.OD_CODEX_DISABLE_PLUGINS;
+    delete process.env.OD_CODEX_SANDBOX;
 
-  withPlatform('win32', () => {
-    const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+    withPlatform('win32', () => {
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
 
-    assert.deepEqual(args.slice(0, 5), [
-      'exec',
-      '--json',
-      '--skip-git-repo-check',
-      '--sandbox',
-      'danger-full-access',
-    ]);
-    // The workspace-write-scoped network override is meaningless under
-    // danger-full-access and must not appear on Windows.
-    assert.equal(args.includes('workspace-write'), false);
-    assert.equal(
-      args.includes('sandbox_workspace_write.network_access=true'),
-      false,
-    );
-    assert.equal(args.includes('default_permissions=":workspace"'), true);
+      assert.deepEqual(args.slice(0, 5), [
+        'exec',
+        '--json',
+        '--skip-git-repo-check',
+        '--sandbox',
+        'danger-full-access',
+      ]);
+      // The workspace-write-scoped network override is meaningless under
+      // danger-full-access and must not appear on Windows.
+      assert.equal(args.includes('workspace-write'), false);
+      assert.equal(
+        args.includes('sandbox_workspace_write.network_access=true'),
+        false,
+      );
+      assert.equal(args.includes('default_permissions=":workspace"'), true);
+    });
   });
 });
 
 test('codex args keep plugins enabled when OD_CODEX_DISABLE_PLUGINS is unset', () => {
-  delete process.env.OD_CODEX_DISABLE_PLUGINS;
+  withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX'], () => {
+    delete process.env.OD_CODEX_DISABLE_PLUGINS;
+    delete process.env.OD_CODEX_SANDBOX;
 
-  withPlatform('darwin', () => {
-    const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+    withPlatform('darwin', () => {
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
 
-    assert.equal(args.includes('--disable'), false);
-    assert.equal(args.includes('plugins'), false);
+      assert.equal(args.includes('--disable'), false);
+      assert.equal(args.includes('plugins'), false);
+    });
   });
 });
 
 test('codex args keep plugins enabled when OD_CODEX_DISABLE_PLUGINS is not 1', () => {
-  process.env.OD_CODEX_DISABLE_PLUGINS = 'true';
+  withEnvSnapshot(['OD_CODEX_DISABLE_PLUGINS', 'OD_CODEX_SANDBOX'], () => {
+    process.env.OD_CODEX_DISABLE_PLUGINS = 'true';
+    delete process.env.OD_CODEX_SANDBOX;
 
-  withPlatform('darwin', () => {
-    const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+    withPlatform('darwin', () => {
+      const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
 
-    assert.equal(args.includes('--disable'), false);
-    assert.equal(args.includes('plugins'), false);
+      assert.equal(args.includes('--disable'), false);
+      assert.equal(args.includes('plugins'), false);
+    });
   });
 });
 
@@ -376,6 +458,26 @@ test('cursor-agent parses live model ids separately from display labels', () => 
     { id: 'auto', label: 'Auto' },
     { id: 'composer-2.5', label: 'Composer 2.5 (current)' },
     { id: 'grok-4.3', label: 'Grok 4.3 1M' },
+  ]);
+});
+
+test('grok-build filters login headers from live model discovery output', () => {
+  assert.ok(grokBuild.listModels, 'grok-build must define live model discovery');
+  const parsed = grokBuild.listModels.parse([
+    'You are logged in with grok.com.',
+    '',
+    'Default model: grok-build',
+    '',
+    'Available models:',
+    '',
+    '- grok-composer-2.5-fast',
+    '* grok-build (default)',
+  ].join('\n'));
+
+  assert.deepEqual(parsed, [
+    { id: 'default', label: 'Default (CLI config)' },
+    { id: 'grok-composer-2.5-fast', label: 'grok-composer-2.5-fast' },
+    { id: 'grok-build', label: 'grok-build' },
   ]);
 });
 

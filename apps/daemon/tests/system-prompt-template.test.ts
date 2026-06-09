@@ -81,6 +81,18 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     expect(out).toContain('license MIT');
   });
 
+  it('asks for image model and aspect ratio when they are unset (not silently defaulted)', () => {
+    const out = composeSystemPrompt({
+      metadata: { kind: 'image' },
+    });
+
+    // The composer no longer seeds imageModel/imageAspect — the agent must ask.
+    expect(out).toContain('**imageModel**: (unknown — ask: which image model/provider to use)');
+    expect(out).toContain('**aspectRatio**: (unknown — ask: 1:1, 16:9 for landscape, 9:16 for portrait)');
+    expect(out).not.toContain('gpt-image-2 (default');
+    expect(out).not.toContain('1:1 (default');
+  });
+
   it('inlines the prompt body for video projects too', () => {
     const out = composeSystemPrompt({
       metadata: {
@@ -198,6 +210,16 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
     });
 
     expect(out).not.toContain('Reference prompt template');
+  });
+
+  it('non-media dispatch hint includes fal-ai/* passthrough instruction', () => {
+    const out = composeSystemPrompt({
+      metadata: { kind: 'prototype' },
+    });
+
+    expect(out).toContain('## Media generation (if asked)');
+    expect(out).toContain('fal-ai/*');
+    expect(out).toContain('pass it through as-is without substitution');
   });
 
   it('renders without source attribution when the source field is missing', () => {
@@ -420,8 +442,8 @@ describe('composeSystemPrompt — metadata.promptTemplate', () => {
       },
     });
 
-    expect(out).toContain('`media generate` treats the handoff as');
-    expect(out).toContain('exit `0` so the first dispatch does not look like a failed shell call');
+    expect(out).toContain('always exits 0');
+    expect(out).toContain('as a handoff signal');
     expect(out).toContain('`"$OD_NODE_BIN" "$OD_BIN" media generate` exits `0`');
     expect(out).toContain('either `file` or `taskId`');
     expect(out).toContain('`2` from `media wait` is not a failure');

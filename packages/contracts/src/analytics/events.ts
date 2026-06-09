@@ -25,6 +25,8 @@ export type AnalyticsEventName =
   // Run lifecycle (daemon authoritative)
   | 'run_created'
   | 'run_finished'
+  | 'run_retry_attempted'
+  | 'run_retry_finished'
   // Packaged updater lifecycle
   | 'update_install_result'
   | 'update_apply_observed'
@@ -42,6 +44,7 @@ export type AnalyticsEventName =
   | 'settings_view'
   | 'settings_cli_test_result'
   | 'settings_byok_test_result'
+  | 'settings_byok_models_fetch_result'
   | 'settings_connector_auth_result'
   // Onboarding-only result events. UI clicks + page_views inside the
   // onboarding flow reuse the generic `ui_click` / `page_view` shapes
@@ -94,6 +97,14 @@ export type TrackingProjectKind =
   | 'template'
   | 'image'
   | 'video'
+  // `hyperframes` is a `video` project rendered by the local HyperFrames
+  // HTML→MP4 engine (`videoModel === 'hyperframes-html'`). The product
+  // routes it as its own task type (a peer of Video, with its own Home
+  // chip), and its cost/latency/success profile differs sharply from AI
+  // video providers, so it is surfaced as a first-class project_kind
+  // rather than collapsed into generic `video`. `model_id` still carries
+  // `hyperframes-html` as a secondary anchor.
+  | 'hyperframes'
   | 'audio'
   // `design_system` covers DS-as-project runs (creation + regeneration).
   // The dashboard reads it on run_created / run_finished to split the
@@ -109,6 +120,26 @@ export type TrackingProjectSource =
   | 'template'
   | 'chat_composer'
   | 'unknown';
+
+export type TrackingAmrEntrySource =
+  | 'onboarding_amr_card'
+  | 'onboarding_amr_sign_in_continue'
+  | 'inline_model_switcher_amr_row'
+  | 'settings_amr_agent_card'
+  | 'settings_amr_authorize'
+  | 'chat_error_authorize_retry'
+  | 'chat_error_recharge'
+  | 'chat_error_switch_retry_card'
+  | 'generation_preview_authorize_retry'
+  | 'generation_preview_recharge'
+  | 'generation_preview_switch_retry_card';
+
+export interface AmrEntryAttribution {
+  entryId: string;
+  sourceProduct: 'open_design';
+  sourceDetail: TrackingAmrEntrySource;
+  occurredAt: string;
+}
 
 // The six tabs inside the New project modal (CSV row 7 tab_name).
 export type TrackingNewProjectTab =
@@ -140,7 +171,8 @@ export type TrackingByokProviderId =
   | 'senseaudio';
 
 // v2 CLI provider catalogue (CSV row 63 + image 59). Adds `qoder_cli` and
-// `kilo` over v1.
+// `kilo` over v1, plus `amr` (the vela CLI runtime) so AMR runs no longer
+// fold into the `other` catch-all bucket.
 export type TrackingCliProviderId =
   | 'claude_code'
   | 'codex_cli'
@@ -155,6 +187,7 @@ export type TrackingCliProviderId =
   | 'github_copilot_cli'
   | 'pi'
   | 'kilo'
+  | 'amr'
   | 'other';
 
 export type TrackingFeedbackProviderId =
@@ -175,8 +208,11 @@ export type TrackingExportFormat =
   | 'pptx'
   | 'zip'
   | 'html'
+  | 'image'
   | 'markdown'
   | 'template'
+  | 'share_link'
+  | 'share_page'
   | 'vercel'
   | 'cloudflare_pages';
 
@@ -184,6 +220,122 @@ export type TrackingResult = 'success' | 'failed';
 export type TrackingRunResult = 'success' | 'failed' | 'cancelled';
 export type TrackingExportResult = 'success' | 'failed' | 'cancelled';
 export type TrackingTestResult = 'success' | 'failed' | 'timeout';
+export type TrackingRunFailureCategory =
+  | 'auth'
+  | 'rate_limit'
+  | 'insufficient_balance'
+  | 'model_unavailable'
+  | 'prompt_too_large'
+  | 'upstream_unavailable'
+  | 'timeout'
+  | 'empty_output'
+  | 'tool_error'
+  | 'process_exit'
+  | 'user_cancel'
+  | 'unknown';
+export type TrackingRunFailureDetail =
+  | 'auth_required'
+  | 'stale_profile'
+  | 'refresh_token_reused'
+  | 'missing_api_key'
+  | 'hard_quota'
+  | 'rate_limit_429'
+  | 'amr_insufficient_balance'
+  | 'model_not_found'
+  | 'model_not_supported'
+  | 'model_disabled'
+  | 'cli_version_incompatible'
+  | 'prompt_too_large'
+  | 'upstream_5xx'
+  | 'stream_disconnected'
+  | 'network_error'
+  | 'provider_high_demand'
+  | 'provider_routing_error'
+  | 'inactivity_timeout'
+  | 'timeout'
+  | 'empty_output'
+  | 'tool_error'
+  | 'cli_not_installed'
+  | 'spawn_failed'
+  | 'spawn_enoexec'
+  | 'spawn_ebadf'
+  | 'spawn_eperm'
+  | 'stdin_write_eof'
+  | 'agent_protocol_error'
+  | 'permission_request_not_found'
+  | 'qoder_stop_sequence'
+  | 'signal_killed'
+  | 'process_crashed'
+  | 'interrupted'
+  | 'exit_code'
+  | 'terminated_unknown'
+  | 'execution_failed'
+  | 'user_cancelled'
+  | 'unknown';
+export type TrackingRunFailureStage =
+  | 'preflight'
+  | 'spawn'
+  | 'session_init'
+  | 'model_select'
+  | 'prompt_send'
+  | 'first_token_wait'
+  | 'tool_execution'
+  | 'artifact_write'
+  | 'child_close'
+  | 'finalize';
+export type TrackingRunFailureUserAction =
+  | 'retry'
+  | 'login'
+  | 'recharge'
+  | 'switch_model'
+  | 'reduce_context'
+  | 'install_cli'
+  | 'none';
+export type TrackingRunRetryStrategy = 'same_run_transient';
+export type TrackingRunRetryFinalResult =
+  | 'not_attempted'
+  | 'success'
+  | 'failed'
+  | 'suppressed';
+export type TrackingRunRetrySuppressedReason =
+  | 'not_failed'
+  | 'not_retryable'
+  | 'unsupported_category'
+  | 'hard_quota'
+  | 'attempt_limit_reached'
+  | 'cancel_requested'
+  | 'user_visible_output_seen'
+  | 'tool_call_seen'
+  | 'artifact_write_seen'
+  | 'live_artifact_seen';
+export type TrackingRunDiagnosticSource =
+  | 'error_event'
+  | 'stderr'
+  | 'exit_code'
+  | 'signal'
+  | 'unknown';
+export type TrackingStderrLineCountBucket =
+  | 'none'
+  | '1_5'
+  | '6_20'
+  | '21_100'
+  | 'gt_100';
+export type TrackingLangfuseDeliveryStatus =
+  | 'not_expected'
+  | 'queued'
+  | 'accepted'
+  | 'failed';
+export type TrackingLangfuseDropReason =
+  | 'metrics_consent_off'
+  | 'content_consent_off'
+  | 'missing_sink_config'
+  | 'payload_too_large'
+  | 'relay_429'
+  | 'relay_413'
+  | 'relay_5xx'
+  | 'langfuse_4xx'
+  | 'langfuse_5xx'
+  | 'network_error';
 
 export type TrackingFeedbackRating = 'positive' | 'negative';
 // Click events emit `none` when the user clears a previously-set rating, so
@@ -268,6 +420,7 @@ export type TrackingChatPanelPageViewSource =
 export type TrackingOnboardingArea =
   | 'runtime'
   | 'about_you'
+  | 'newsletter'
   | 'design_system'
   | 'generation_progress';
 
@@ -278,6 +431,7 @@ export type TrackingOnboardingStepIndex = '1' | '2' | '3' | 'progress';
 export type TrackingOnboardingStepName =
   | 'connect'
   | 'about_you'
+  | 'newsletter'
   | 'design_system'
   | 'generation';
 
@@ -374,6 +528,8 @@ export type TrackingOnboardingClickElement =
   | 'organization_size'
   | 'use_case'
   | 'hear_about_us'
+  // Optional newsletter email captured on the About-you step
+  | 'newsletter_email'
   // Fires once on Finish-setup, carrying the full survey snapshot
   // (role + organization_size + use_case + discovery_source) so the
   // funnel always has the user's final picks even when individual
@@ -395,7 +551,8 @@ export type TrackingOnboardingClickAction =
   | 'select_option'
   | 'add_source'
   | 'upload_source'
-  | 'show_access_methods';
+  | 'show_access_methods'
+  | 'subscribe';
 
 // All optional except the discriminators (area/element/action/step/
 // session id). `role`/`organization_size`/`use_case`/`discovery_source`
@@ -426,6 +583,9 @@ export interface OnboardingClickProps {
   source_type?: TrackingOnboardingSourceType;
   has_brand_description?: boolean;
   source_count?: number;
+  // True when the user left a (valid) newsletter email on the About-you
+  // step. Boolean only — the email address itself is never sent here.
+  newsletter_opt_in?: boolean;
 }
 
 // ---- Onboarding lifecycle result events ---------------------------------
@@ -690,6 +850,9 @@ export type TrackingDesignSystemApplyTargetKind =
   | 'slide_deck'
   | 'image'
   | 'video'
+  // HyperFrames projects can be a DS-apply target too; keep this in lockstep
+  // with `TrackingProjectKind` so the picker reports them distinctly.
+  | 'hyperframes'
   | 'audio'
   | 'live_artifact'
   | 'unknown';
@@ -891,9 +1054,41 @@ export interface HomeChatComposerClickProps {
     // Paperclip icon opening the file picker. Mirrors the chat_panel
     // composer's `element: 'attachment'` so the same dashboard counts
     // "user opened the file picker" across both surfaces.
-    | 'attachment';
-  // For plugin / action chips, the specific id (e.g. `prototype`, `from_figma`).
+    | 'attachment'
+    // Local-storage / working-dir picker under the home composer; `task_chip`
+    // is the task-type rail (原型 / 幻灯片 / HyperFrames / 视频 / …).
+    | 'working_dir'
+    | 'working_dir_clear'
+    // Re-selecting a previously used folder from the working-dir picker's
+    // "Recent folders" submenu.
+    | 'working_dir_recent'
+    | 'task_chip'
+    // Sub-category filter pill under the task rail (全部 / Landing / Brand /
+    // Dashboards / …). `subcategory` carries the picked slug; '全部' sends
+    // `subcategory: 'all'`. `chip_id` is the parent task type.
+    | 'subcategory_chip'
+    // An example-prompt card below the rail ("示例提示词"). `chip_id` is the
+    // task type; for plugin-preset cards `plugin_id` / `plugin_type` identify
+    // the preset. The raw prompt text is never sent (free text / PII rule).
+    | 'example_prompt'
+    // The "+" menu on the home composer (same control as the in-project
+    // composer's `plus_*` events): opening it, inserting a
+    // connector/plugin/mcp mention (`resource_kind` + `resource_id`), or
+    // jumping to the add-resource surface (`resource_kind`).
+    | 'plus_menu_open'
+    | 'plus_pick'
+    | 'plus_add';
+  // For `plus_pick` / `plus_add`: which kind of resource (and its id on pick).
+  resource_kind?: 'connector' | 'plugin' | 'mcp';
+  resource_id?: string;
+  // For plugin / action / task chips, the specific id (e.g. `prototype`,
+  // `from_figma`, `hyperframes`).
   chip_id?: string;
+  // For `subcategory_chip`: the picked sub-category slug ('all' on 全部).
+  subcategory?: string;
+  // For `example_prompt` cards backed by a plugin preset: which preset.
+  plugin_id?: string;
+  plugin_type?: string;
 }
 
 export interface UpdateIndicatorClickProps {
@@ -1029,9 +1224,30 @@ export interface AutomationsClickProps {
     | 'history'
     | 'cancel'
     | 'create'
-    | 'save';
+    | 'save'
+    | 'crystallize'
+    | 'proposal_apply'
+    | 'proposal_reject';
   type_id?: 'orbit' | 'routines' | 'schedules' | 'live_artifacts';
-  filter_id?: 'all' | 'scheduled' | 'running' | 'done';
+  // filter_id mirrors the template category tabs actually rendered in the
+  // Automations tab; the legacy run-status values stay for forward-compat.
+  filter_id?:
+    | 'all'
+    | 'scheduled'
+    | 'running'
+    | 'done'
+    | 'orbit'
+    | 'live-artifact'
+    | 'routine'
+    | 'memory'
+    | 'design-system'
+    | 'skills'
+    | 'connectors'
+    | 'compression'
+    | 'release'
+    | 'quality';
+  // Kind of the template whose card was clicked (element=type_card).
+  template_kind?: 'orbit' | 'live-artifact' | 'routine';
 }
 
 // PLUGINS
@@ -1103,6 +1319,24 @@ export interface PluginLoopClickProps {
   area: 'plugin_loop';
   element: 'clear_active' | 'submit' | 'card_details' | 'card_use';
   plugin_id?: string;
+}
+
+// COMMUNITY — the home "Community" gallery: a wall of live example.html
+// preview tiles (PluginsHomeSection cardLayout="gallery"). `card` opens
+// the plugin detail modal (tile body click or keyboard); `card_open_external`
+// is the ↗ that opens the real example page in a new tab, bypassing the
+// modal — a strong "go straight to the finished thing" intent signal.
+export interface CommunityGalleryClickProps {
+  page_name: 'home';
+  area: 'community_gallery';
+  // `use_plugin` is the user actually applying a community plugin into the
+  // composer (from the gallery card's Use button or its detail modal), as
+  // opposed to just opening the card. `action` distinguishes a plain apply
+  // from use-with-query.
+  element: 'card' | 'card_open_external' | 'use_plugin';
+  plugin_id?: string;
+  plugin_type?: string;
+  action?: 'use' | 'use_with_query';
 }
 
 // DESIGN SYSTEMS
@@ -1203,7 +1437,102 @@ export interface ChatPanelClickProps {
     | 'composer_settings'
     | 'attachment'
     | 'send'
+    | 'mention_popover_trigger'
     | 'resources_popover_trigger';
+}
+
+// Composer mode the user sends prompts in. `ask` is the lighter Q&A mode
+// (the wire / DB value is `chat`; the UI labels it "Ask"); `design` is the
+// full design-agent run. Map the wire `chat` → `ask` at every emit site via
+// `sessionModeToTracking` so analytics speaks the product's language.
+export type TrackingSessionMode = 'ask' | 'design';
+
+// Toggling the ask/design switch in the chat composer.
+export interface ComposerSessionModeClickProps {
+  // The composer renders on both the home hero and the in-project chat panel;
+  // the toggle is the same control on both surfaces.
+  page_name: 'home' | 'chat_panel';
+  area: 'chat_composer';
+  element: 'session_mode_toggle';
+  mode_before: TrackingSessionMode;
+  mode_after: TrackingSessionMode;
+  project_id?: string;
+}
+
+// The "设计百宝箱" (Design toolbox) flyout inside the composer's "+" menu.
+// `design_toolbox_open` fires when the panel is opened; `..._action` when a
+// predefined follow-up action is picked (`toolbox_action_id`); `..._resource`
+// when a skill / plugin / mcp / connector / file is inserted
+// (`resource_kind` + `resource_id`).
+export interface DesignToolboxClickProps {
+  page_name: 'chat_panel';
+  area: 'chat_composer';
+  element:
+    | 'design_toolbox_open'
+    | 'design_toolbox_action'
+    | 'design_toolbox_resource';
+  toolbox_action_id?: string;
+  resource_kind?:
+    | 'skill'
+    | 'plugin'
+    | 'mcp'
+    | 'mcp-template'
+    | 'connector'
+    | 'file';
+  resource_id?: string;
+  project_id?: string;
+}
+
+// The rest of the in-project composer bottom bar (not the mode toggle or the
+// design toolbox, which have their own events above):
+//   - `plus_menu_open` / `plus_pick` / `plus_add`: the "+" menu — opening it,
+//     inserting a connector/plugin/mcp mention (`resource_kind` + `resource_id`),
+//     or jumping to the add-resource surface (`resource_kind`).
+//   - `design_system_switch`: picked a design system from the composer
+//     (`design_system_id`).
+//   - `working_dir_switch`: changed the project's local-storage working dir.
+//   - `agent_selector_open` / `agent_select` / `agent_model_select`: the CLI/
+//     agent/model dropdown (`agent_id` / `model_id`).
+//   - `context_remove`: removed a staged context chip (`resource_kind` +
+//     `resource_id`).
+export interface ComposerBarClickProps {
+  page_name: 'chat_panel';
+  area: 'chat_composer';
+  element:
+    | 'plus_menu_open'
+    | 'plus_pick'
+    | 'plus_add'
+    | 'design_system_switch'
+    | 'working_dir_switch'
+    | 'agent_selector_open'
+    | 'agent_select'
+    | 'agent_model_select'
+    | 'context_remove';
+  resource_kind?:
+    | 'connector'
+    | 'plugin'
+    | 'mcp'
+    | 'skill'
+    | 'workspace'
+    | 'attachment';
+  resource_id?: string;
+  agent_id?: string;
+  model_id?: string;
+  design_system_id?: string;
+  project_id?: string;
+}
+
+// Next-step action affordance shown under the last successful assistant
+// message. `next_step_exposed` fires once when the affordance becomes visible
+// so the funnel can divide clicks by exposure; the action elements drive the
+// "second-turn rate" / "share rate" acceptance metrics. `chip_id` carries the
+// recommended-chip identity (e.g. `polish_visual`, `second_version`) for the
+// `chip` element.
+export interface NextStepActionClickProps {
+  page_name: 'chat_panel';
+  area: 'next_step';
+  element: 'next_step_exposed' | 'share' | 'chip' | 'share_to_open_design';
+  chip_id?: string;
 }
 
 // Hosted-AMR nudge shown under a non-AMR agent's model/auth/quota failure.
@@ -1212,6 +1541,17 @@ export interface RunFailedToastClickProps {
   page_name: 'chat_panel';
   area: 'chat_panel';
   element: 'go_amr';
+}
+
+export interface AmrEntryClickProps {
+  page_name: TrackingPageName;
+  area: 'amr_entry';
+  element: TrackingAmrEntrySource;
+  action: 'click_amr_entry';
+  entry_id: string;
+  source_product: 'open_design';
+  source_detail: TrackingAmrEntrySource;
+  entry_occurred_at: string;
 }
 
 export interface ChatPanelResourcesPopoverClickProps {
@@ -1245,6 +1585,23 @@ export interface FileManagerClickProps {
     | 'previous'
     | 'next'
     | 'per_page_dropdown';
+}
+
+// The workspace tab strip's "+" launcher — a command-palette popover for
+// opening tabs. `open` fires when the menu is opened; `filter` when a file-kind
+// chip is picked (`kind_filter`); `create` when a "New …" action runs
+// (`action_id` = new-terminal | new-browser | …); `open_file` when a project
+// file is opened as a tab (`file_kind`); `open_tab` when an already-open tab is
+// focused (`tab_kind` = browser | terminal | design-files | …).
+export interface TabLauncherClickProps {
+  page_name: 'file_manager';
+  area: 'tab_launcher';
+  element: 'open' | 'filter' | 'create' | 'open_file' | 'open_tab';
+  action_id?: string;
+  kind_filter?: string;
+  file_kind?: string;
+  tab_kind?: string;
+  project_id?: string;
 }
 
 // ARTIFACT
@@ -1294,8 +1651,84 @@ export interface ArtifactHeaderClickProps {
     | 'back'
     | 'edit'
     | 'present_dropdown'
+    // `download_dropdown` distinguishes the Download split button from the
+    // Share button; before, both reported `share_dropdown` and were
+    // indistinguishable in the funnel.
+    | 'download_dropdown'
     | 'share_dropdown'
     | 'settings';
+  artifact_id?: string;
+  artifact_kind?: TrackingArtifactKind;
+}
+
+// Canonical, bounded set of hand-off `target_id` values: the editor /
+// file-manager ids (mirrors `HostEditorId` in `../api/host-tools`) plus the
+// tracked code-agent CLI ids. Single source of truth for both the type and
+// the runtime allow-list in `handoffTargetIdToTracking`. Keep in sync with
+// `HostEditorId` and `HandoffButton`'s CLI_ORDER; unknown runtime ids
+// normalize to `'other'` so the schema never leaks an editor label, binary
+// name, or other free-form / PII value.
+export const TRACKING_HANDOFF_TARGET_IDS = [
+  // editors / file managers (HostEditorId)
+  'cursor', 'vscode', 'windsurf', 'zed', 'qoder', 'antigravity', 'webstorm',
+  'idea', 'xcode', 'finder', 'explorer', 'file-manager', 'terminal', 'warp',
+  // code-agent CLIs (HandoffButton CLI_ORDER; qoder / antigravity already above)
+  'amr', 'claude', 'codex', 'opencode', 'cursor-agent', 'gemini', 'qwen',
+  'copilot', 'grok-build', 'deepseek', 'kimi', 'hermes', 'devin', 'kiro',
+  'kilo', 'vibe', 'aider', 'trae-cli', 'pi', 'reasonix',
+] as const;
+
+export type TrackingHandoffTargetId =
+  | (typeof TRACKING_HANDOFF_TARGET_IDS)[number]
+  | 'other';
+
+// Normalize a runtime editor / CLI id to the bounded tracking enum. Unknown
+// ids (e.g. a CLI the daemon adds later) collapse to `'other'` rather than
+// shipping a free-form value, keeping the no-PII guarantee enforced in code.
+export function handoffTargetIdToTracking(
+  id: string | null | undefined,
+): TrackingHandoffTargetId {
+  return (TRACKING_HANDOFF_TARGET_IDS as readonly string[]).includes(id ?? '')
+    ? (id as TrackingHandoffTargetId)
+    : 'other';
+}
+
+// Hand-off button in the workspace header (open the project folder in a local
+// editor, or copy a hand-off prompt for a code-agent CLI). Lives under
+// `page_name=artifact` / `area=handoff` so it sits next to the other header
+// actions (present/share/download/settings) in the funnel.
+export interface HandoffClickProps {
+  page_name: 'artifact';
+  area: 'handoff';
+  element:
+    // Primary split button — launches the preferred editor, or toggles the
+    // picker when there is no preferred target yet.
+    | 'trigger'
+    // Caret next to the primary button — toggles the picker menu.
+    | 'caret'
+    // Switch between the Editor and CLI tabs inside the picker.
+    | 'tab'
+    // Choose a target framework chip for the CLI hand-off prompt.
+    | 'framework'
+    // Copy the absolute project path.
+    | 'copy_path'
+    // Launch a specific editor target (or the Finder/Explorer fallback).
+    | 'open_editor'
+    // Copy the hand-off prompt for a specific CLI agent.
+    | 'copy_cli_prompt'
+    // Open the Open Design AMR website link.
+    | 'amr_website';
+  // Bounded enum id of the editor / CLI target, present for `open_editor`,
+  // `copy_cli_prompt`, and for `trigger` when it directly launches the
+  // preferred editor. Normalized via `handoffTargetIdToTracking` so it is
+  // never a free path or display name (`'other'` for unknown ids).
+  target_id?: TrackingHandoffTargetId;
+  // Whether the chosen editor / CLI target was detected as installed.
+  target_available?: boolean;
+  // Which hand-off tab the click relates to (tab switches and CLI copies).
+  handoff_tab?: 'editor' | 'cli';
+  // Selected framework id for CLI prompt copies / framework chip selection.
+  framework?: 'react' | 'vue' | 'svelte' | 'solid' | 'next' | 'vanilla';
   artifact_id?: string;
   artifact_kind?: TrackingArtifactKind;
 }
@@ -1383,6 +1816,7 @@ export type TrackingSettingsArea =
   | 'notifications'
   | 'pets'
   | 'design_systems'
+  | 'project_locations'
   | 'privacy'
   | 'about';
 
@@ -1537,6 +1971,7 @@ export type UiClickProps =
   | PluginsSourcesTabClickProps
   | PluginDetailClickProps
   | PluginLoopClickProps
+  | CommunityGalleryClickProps
   | DesignSystemsTopClickProps
   | DesignSystemsTemplateCardClickProps
   | DesignSystemsTemplatesModalClickProps
@@ -1547,13 +1982,20 @@ export type UiClickProps =
   | IntegrationsSkillsTabClickProps
   | IntegrationsUseEverywhereTabClickProps
   | ChatPanelClickProps
+  | ComposerSessionModeClickProps
+  | DesignToolboxClickProps
+  | ComposerBarClickProps
+  | NextStepActionClickProps
   | RunFailedToastClickProps
+  | AmrEntryClickProps
   | ChatPanelResourcesPopoverClickProps
   | FileManagerClickProps
+  | TabLauncherClickProps
   | ArtifactToolbarClickProps
   | TweaksPopoverClickProps
   | CommentPopoverClickProps
   | ArtifactHeaderClickProps
+  | HandoffClickProps
   | PresentPopoverClickProps
   | ShareOptionPopoverClickProps
   | AssistantFeedbackButtonClickProps
@@ -1588,6 +2030,16 @@ export interface NewProjectModalSurfaceViewProps {
 export interface PluginReplacementModalSurfaceViewProps {
   page_name: 'home';
   area: 'plugin_replacement_modal';
+}
+
+// Impression of the plugin detail modal opened from the home Community
+// gallery. Fires once per open so the gallery → detail funnel has a
+// denominator (card clicks) and a numerator (modal exposures).
+export interface PluginDetailModalSurfaceViewProps {
+  page_name: 'home';
+  area: 'plugin_detail_modal';
+  plugin_id?: string;
+  plugin_type?: string;
 }
 
 export interface DesignSystemsTemplatesModalSurfaceViewProps {
@@ -1647,6 +2099,7 @@ export type SurfaceViewProps =
   | HelpPopoverSurfaceViewProps
   | NewProjectModalSurfaceViewProps
   | PluginReplacementModalSurfaceViewProps
+  | PluginDetailModalSurfaceViewProps
   | DesignSystemsTemplatesModalSurfaceViewProps
   | AssistantFeedbackReasonPanelSurfaceViewProps
   | UpdateIndicatorSurfaceViewProps
@@ -1670,6 +2123,11 @@ export interface ProjectCreateResultProps {
   reference_template?: string;
   model_id?: string;
   aspect?: string;
+  // The scenario plugin the send was routed through (when any), so a
+  // successful/failed create can be attributed to a specific plugin —
+  // e.g. an example-prompt preset or a community plugin the user applied.
+  plugin_id?: string;
+  plugin_type?: string;
   result: TrackingResult;
   error_code?: string;
 }
@@ -1748,6 +2206,18 @@ export interface RunCreatedProps {
   agent_provider_id: TrackingCliProviderId;
   skill_id: string | null;
   mcp_id: string | null;
+  // Composer mode the prompt was sent in. `ask` is the lighter Q&A mode
+  // (wire value `chat`); `design` is the full design-agent run. Optional so
+  // DS-generation runs (which have no user-facing mode) can omit it.
+  session_mode?: TrackingSessionMode;
+  // The plugin actively bound to this run (the applied plugin snapshot), or
+  // null when the user ran with no active plugin.
+  plugin_id?: string | null;
+  // Per-turn capability context: the MCP servers and skills actually enabled
+  // for this send. Multi-valued, so recorded as arrays alongside the legacy
+  // singular `mcp_id` / `skill_id` (which stay for back-compat).
+  mcp_ids?: string[];
+  skill_ids?: string[];
   token_count_source: TrackingTokenCountSource;
 }
 
@@ -1755,12 +2225,45 @@ export interface RunFinishedProps extends Omit<RunCreatedProps, 'area'> {
   area: 'chat_panel' | 'design_system_generation';
   result: TrackingRunResult;
   error_code?: string;
+  failure_category?: TrackingRunFailureCategory;
+  failure_detail?: TrackingRunFailureDetail;
+  failure_stage?: TrackingRunFailureStage;
+  retryable?: boolean;
+  user_action?: TrackingRunFailureUserAction;
+  langfuse_trace_id?: string;
+  langfuse_expected?: boolean;
+  langfuse_drop_reason?: TrackingLangfuseDropReason;
+  langfuse_delivery_status?: TrackingLangfuseDeliveryStatus;
+  diagnostic_source?: TrackingRunDiagnosticSource;
+  stderr_present?: boolean;
+  stderr_line_count_bucket?: TrackingStderrLineCountBucket;
   artifact_count: number;
+  // True when the run raised an AskUserQuestion clarification card. Such runs
+  // are intent-clarification turns (the agent stops to ask the user a question)
+  // and therefore inherently produce no artifact, so the dashboard can exclude
+  // them from the "run finished -> has artifact" funnel instead of counting
+  // them as artifact-generation failures.
+  asked_user_question: boolean;
   input_tokens?: number;
+  input_tokens_provider?: number;
+  input_tokens_effective?: number;
   output_tokens?: number;
   total_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+  uncached_input_tokens?: number;
+  estimated_context_tokens?: number;
+  cache_hit_ratio?: number;
+  cache_token_source?: 'anthropic' | 'openai' | 'unavailable';
+  queue_duration_ms?: number;
+  pre_spawn_duration_ms?: number;
+  process_spawn_duration_ms?: number;
   time_to_first_token_ms?: number;
+  spawn_to_first_token_ms?: number;
   generation_duration_ms?: number;
+  tool_call_count?: number;
+  tool_duration_ms?: number;
+  finalize_duration_ms?: number;
   total_duration_ms: number;
   // DS-variant outcome fields. `design_system_created` is true when
   // the run produced a stored DESIGN.md; `preview_module_count` and
@@ -1769,6 +2272,36 @@ export interface RunFinishedProps extends Omit<RunCreatedProps, 'area'> {
   design_system_created?: boolean;
   preview_module_count?: number;
   missing_font_count?: number;
+  retry_attempt_count?: number;
+  retry_final_result?: TrackingRunRetryFinalResult;
+  retry_suppressed_reason?: TrackingRunRetrySuppressedReason;
+}
+
+export interface RunRetryBaseProps {
+  page_name: 'chat_panel' | 'design_system_project';
+  area: 'chat_panel' | 'design_system_generation';
+  project_id: string;
+  conversation_id: string | null;
+  run_id: string;
+  retry_of_run_id: string;
+  retry_attempt_index: number;
+  retry_max_attempts: number;
+  retry_strategy: TrackingRunRetryStrategy;
+  agent_provider_id: TrackingCliProviderId;
+  model_id: string;
+  failure_category?: TrackingRunFailureCategory;
+  failure_detail?: TrackingRunFailureDetail;
+  failure_stage?: TrackingRunFailureStage;
+  error_code?: string;
+}
+
+export interface RunRetryAttemptedProps extends RunRetryBaseProps {
+  retry_reason: 'transient_failure';
+}
+
+export interface RunRetryFinishedProps extends RunRetryBaseProps {
+  retry_result: 'success' | 'failed' | 'suppressed';
+  retry_suppressed_reason?: TrackingRunRetrySuppressedReason;
 }
 
 export type TrackingUpdateApplyResult = 'success' | 'not_applied' | 'unknown';
@@ -1969,8 +2502,26 @@ export interface SettingsByokTestResultProps {
   // wire format matches the doc.
   area: 'execution_model';
   provider_id: TrackingByokProviderId;
-  result: TrackingTestResult | 'not_ready';
+  result: TrackingTestResult;
   error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  config_key_changed?: boolean;
+  success_after_action?: boolean;
+  duration_ms: number;
+}
+
+export interface SettingsByokModelsFetchResultProps {
+  page_name: TrackingSettingsPage;
+  area: 'configure_execution_mode_byok';
+  provider_id: TrackingByokProviderId;
+  result: TrackingResult;
+  trigger: 'auto' | 'manual';
+  source: 'network' | 'cache';
+  error_code?: string;
+  error_kind?: string;
+  field_missing?: 'api_key' | 'base_url' | 'model' | 'multiple' | 'none';
+  model_count?: number;
   duration_ms: number;
 }
 
@@ -1993,6 +2544,8 @@ export type AnalyticsEventPayload =
   | { event: 'plugin_replacement_result'; props: PluginReplacementResultProps }
   | { event: 'run_created'; props: RunCreatedProps }
   | { event: 'run_finished'; props: RunFinishedProps }
+  | { event: 'run_retry_attempted'; props: RunRetryAttemptedProps }
+  | { event: 'run_retry_finished'; props: RunRetryFinishedProps }
   | { event: 'update_install_result'; props: UpdateInstallResultProps }
   | { event: 'update_apply_observed'; props: UpdateApplyObservedProps }
   | { event: 'file_upload_result'; props: FileUploadResultProps }
@@ -2014,6 +2567,10 @@ export type AnalyticsEventPayload =
   | { event: 'settings_view'; props: SettingsViewProps }
   | { event: 'settings_cli_test_result'; props: SettingsCliTestResultProps }
   | { event: 'settings_byok_test_result'; props: SettingsByokTestResultProps }
+  | {
+      event: 'settings_byok_models_fetch_result';
+      props: SettingsByokModelsFetchResultProps;
+    }
   | { event: 'settings_connector_auth_result'; props: SettingsConnectorAuthResultProps }
   | { event: 'onboarding_runtime_scan_result'; props: OnboardingRuntimeScanResultProps }
   | { event: 'onboarding_complete_result'; props: OnboardingCompleteResultProps }
@@ -2028,10 +2585,28 @@ export type AnalyticsEventPayload =
 
 // ---- Enum mapping helpers (code ↔ CSV wire format) -----------------------
 
+// Map the wire `ChatSessionMode` ('design' | 'chat') to the analytics enum.
+// The composer's "Ask" mode is `chat` on the wire; analytics uses `ask` so
+// the dashboards read in the product's own language. Anything that isn't a
+// recognized design mode buckets into `ask` (the lighter default).
+export function sessionModeToTracking(
+  mode: string | null | undefined,
+): TrackingSessionMode {
+  return mode === 'design' ? 'design' : 'ask';
+}
+
 // Code `ProjectKind` from packages/contracts/src/api/projects.ts:
 //   'prototype' | 'deck' | 'template' | 'other' | 'image' | 'video' | 'audio'
+// Discriminates HyperFrames from generic AI video. A HyperFrames project is
+// stored as `kind: 'video'` with `metadata.videoModel === 'hyperframes-html'`
+// (the local HTML→MP4 renderer); callers pass that videoModel through so the
+// analytics layer can split it out into its own `project_kind`. See the
+// `'hyperframes'` member docblock on `TrackingProjectKind`.
+const HYPERFRAMES_VIDEO_MODEL = 'hyperframes-html';
+
 export function projectKindToTracking(
   kind: string | null | undefined,
+  videoModel?: string | null,
 ): TrackingProjectKind | null {
   switch (kind) {
     case 'prototype':
@@ -2045,7 +2620,9 @@ export function projectKindToTracking(
     case 'image':
       return 'image';
     case 'video':
-      return 'video';
+      // HyperFrames rides on the `video` kind; the local-render engine is the
+      // only thing that distinguishes it, so route on videoModel here.
+      return videoModel === HYPERFRAMES_VIDEO_MODEL ? 'hyperframes' : 'video';
     case 'audio':
       return 'audio';
     case 'live-artifact':
@@ -2134,6 +2711,8 @@ export function agentIdToTracking(agentId: string | null | undefined): TrackingC
       return 'pi';
     case 'kilo':
       return 'kilo';
+    case 'amr':
+      return 'amr';
     default:
       return 'other';
   }
@@ -2220,6 +2799,8 @@ export function settingsSectionToTracking(
       return 'skills';
     case 'designSystems':
       return 'design_systems';
+    case 'projectLocations':
+      return 'project_locations';
     case 'memory':
       return 'memory';
     case 'privacy':

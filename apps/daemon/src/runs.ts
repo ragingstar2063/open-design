@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { normalizeMediaExecutionPolicyForRun } from './media-policy.js';
+import {
+  normalizeRunToolBundleForRun,
+  summarizeRunToolBundle,
+} from './run-tool-bundle.js';
 
 export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 
@@ -45,6 +49,10 @@ export function createChatRunService({
       assistantMessageId: typeof meta.assistantMessageId === 'string' && meta.assistantMessageId ? meta.assistantMessageId : null,
       clientRequestId: typeof meta.clientRequestId === 'string' && meta.clientRequestId ? meta.clientRequestId : null,
       agentId: typeof meta.agentId === 'string' && meta.agentId ? meta.agentId : null,
+      projectMetadata:
+        meta.projectMetadata && typeof meta.projectMetadata === 'object' && !Array.isArray(meta.projectMetadata)
+          ? meta.projectMetadata
+          : null,
       // Plan §3.A1 / spec §11.5. The applied plugin snapshot id pins
       // every prompt fragment and tool gate to a frozen view so replay
       // is byte-equal across plugin upgrades. Runs are in-memory in
@@ -57,6 +65,7 @@ export function createChatRunService({
       pluginId:
         typeof meta.pluginId === 'string' && meta.pluginId ? meta.pluginId : null,
       mediaExecution: normalizeMediaExecutionPolicyForRun(meta.mediaExecution),
+      toolBundle: normalizeRunToolBundleForRun(meta.toolBundle),
       status: 'queued',
       createdAt: now,
       updatedAt: now,
@@ -147,8 +156,10 @@ export function createChatRunService({
     signal: run.signal,
     error: run.error ?? null,
     errorCode: run.errorCode ?? null,
+    resumable: run.resumable ?? false,
     eventsLogPath: run.eventsLogPath ?? null,
     mediaExecution: run.mediaExecution ?? normalizeMediaExecutionPolicyForRun(null),
+    toolBundle: summarizeRunToolBundle(run.toolBundle),
   });
 
   const finish = (run, status, code: number | null = null, signal: string | null = null) => {
@@ -157,7 +168,7 @@ export function createChatRunService({
     run.exitCode = code;
     run.signal = signal;
     run.updatedAt = Date.now();
-    emit(run, 'end', { code, signal, status });
+    emit(run, 'end', { code, signal, status, resumable: run.resumable ?? false });
     for (const sse of run.clients) sse.end();
     run.clients.clear();
     for (const waiter of run.waiters) waiter(statusBody(run));
@@ -175,6 +186,10 @@ export function createChatRunService({
   };
 
   const start = (run, starter) => {
+    run.analyticsTelemetry = {
+      ...(run.analyticsTelemetry ?? {}),
+      startRequestedAt: Date.now(),
+    };
     void starter(run).catch((err) => {
       fail(run, 'AGENT_EXECUTION_FAILED', err instanceof Error ? err.message : String(err));
     });

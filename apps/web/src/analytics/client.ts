@@ -115,6 +115,7 @@ export function bootstrapExceptionTracking(context: AnalyticsContext): Promise<v
         clearExceptionTrackingContext();
         return;
       }
+      const telemetryEnv = cfg.env || 'unknown';
       const distinctId =
         (typeof cfg.installationId === 'string' && cfg.installationId) ||
         context.anonymousId;
@@ -124,6 +125,7 @@ export function bootstrapExceptionTracking(context: AnalyticsContext): Promise<v
         distinctId,
         appVersion: context.appVersion,
         sessionId: context.sessionId,
+        telemetryEnv,
       });
     } catch {
       // Network failure / endpoint unavailable — leave the buffer in
@@ -151,6 +153,7 @@ export async function getAnalyticsClient(
       if (!res.ok) return null;
       const cfg = (await res.json()) as AnalyticsConfigResponse;
       if (!cfg.enabled || !cfg.key || !cfg.host) return null;
+      const telemetryEnv = cfg.env || 'unknown';
       const distinctId =
         (typeof cfg.installationId === 'string' && cfg.installationId) ||
         context.anonymousId;
@@ -212,17 +215,47 @@ export async function getAnalyticsClient(
         //    on scrub.ts.
         before_send: scrubBeforeSend,
 
-        // --- Explicitly disabled --------------------------------------
+        // --- Session replay (privacy-masked) --------------------------
         // Session replay captures the user's entire screen. For a tool
         // where prompts, generated artifacts, and provider API keys are
-        // all visible in DOM, this needs an extensive mask catalogue
-        // before we can satisfy the CSV's no-prompt-content rule. Off
-        // until a dedicated consent surface ships.
-        disable_session_recording: true,
+        // all visible in DOM, recording the raw screen would violate the
+        // CSV's no-prompt-content rule. Rather than gate replay behind a
+        // separate consent surface, we record only layout + interaction
+        // and over-redact every content surface — the same
+        // "redact-by-default, single audit point" philosophy scrub.ts
+        // uses for events (see scrub.ts header). Replay stays gated by the
+        // existing Privacy → "Share usage data" consent: posthog-js's
+        // global opt_out_capturing() halts replay too (see applyConsent()).
+        //
+        // The three redaction layers, in order of how much they cover:
+        //   1. maskTextSelector '*' masks EVERY text node into asterisks,
+        //      so prompts, generated artifact text, provider/model names,
+        //      project titles, and any future text surface never appear in
+        //      a replay. A new sensitive surface is covered automatically.
+        //   2. maskAllInputs masks every <input>/<textarea> value, so the
+        //      prompt composer and BYOK provider-key fields are blanked
+        //      even though only the composer carries `ph-no-capture`.
+        //   3. blockSelector 'iframe' fully blocks every embedded frame.
+        //      The artifact/preview FileViewer iframes (and plugin embeds)
+        //      render generated HTML that can contain anything; rrweb would
+        //      otherwise serialize same-origin/srcDoc frame DOM into the
+        //      recording. They render as an inert placeholder instead.
+        // `ph-no-capture` remains posthog-js's default replay block class,
+        // so the composer subtree stays blocked as defense in depth.
+        disable_session_recording: false,
+        session_recording: {
+          maskAllInputs: true,
+          maskTextSelector: '*',
+          blockSelector: 'iframe',
+          // Don't reach into cross-origin frames either — belt and braces
+          // alongside blockSelector for the URL-load artifact iframe.
+          recordCrossOriginIframes: false,
+        },
 
         loaded: (instance) => {
           lastRegisterPayload = {
             event_schema_version: EVENT_SCHEMA_VERSION,
+            env: telemetryEnv,
             ui_version: context.appVersion,
             app_version: context.appVersion,
             client_type: context.clientType,
@@ -245,6 +278,7 @@ export async function getAnalyticsClient(
             distinctId,
             appVersion: context.appVersion,
             sessionId: context.sessionId,
+            telemetryEnv,
           });
         },
       });

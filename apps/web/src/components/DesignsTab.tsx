@@ -18,6 +18,7 @@ import type {
 	ProjectFile,
 	SkillSummary,
 } from "../types";
+import { AnimatePresence } from "motion/react";
 import { Icon } from "./Icon";
 import { isDesignSystemProject, isPublishedDesignSystemProject } from "./design-system-project";
 import { LiveArtifactBadges } from "./LiveArtifactBadges";
@@ -670,7 +671,7 @@ export function DesignsTab({
 										toggleSelected(p.id);
 									} else {
 										// P0 ui_click area=list element=project_card.
-										const projectKind = projectKindToTracking(p.metadata?.kind);
+										const projectKind = projectKindToTracking(p.metadata?.kind, p.metadata?.videoModel);
 										trackProjectsListClick(analytics.track, {
 											page_name: "projects",
 											area: "list",
@@ -712,7 +713,7 @@ export function DesignsTab({
 												setMenuOpenId((cur) => {
 													const nextId = cur === p.id ? null : p.id;
 													if (nextId === p.id) {
-														const projectKind = projectKindToTracking(p.metadata?.kind);
+														const projectKind = projectKindToTracking(p.metadata?.kind, p.metadata?.videoModel);
 														trackProjectsListClick(analytics.track, {
 															page_name: "projects",
 															area: "list",
@@ -737,7 +738,7 @@ export function DesignsTab({
 												type="button"
 												role="menuitem"
 												onClick={() => {
-													const projectKind = projectKindToTracking(p.metadata?.kind);
+													const projectKind = projectKindToTracking(p.metadata?.kind, p.metadata?.videoModel);
 													trackProjectsMorePopoverClick(analytics.track, {
 														page_name: "projects",
 														area: "projects_more_popover",
@@ -757,7 +758,7 @@ export function DesignsTab({
 												role="menuitem"
 												className="danger"
 												onClick={() => {
-													const projectKind = projectKindToTracking(p.metadata?.kind);
+													const projectKind = projectKindToTracking(p.metadata?.kind, p.metadata?.videoModel);
 													trackProjectsMorePopoverClick(analytics.track, {
 														page_name: "projects",
 														area: "projects_more_popover",
@@ -999,13 +1000,15 @@ export function DesignsTab({
 					</div>
 				</div>
 			) : null}
-			{deleteToast ? (
-				<Toast
-					key={deleteToast.id}
-					message={deleteToast.message}
-					onDismiss={() => setDeleteToast(null)}
-				/>
-			) : null}
+			<AnimatePresence>
+				{deleteToast ? (
+					<Toast
+						key={deleteToast.id}
+						message={deleteToast.message}
+						onDismiss={() => setDeleteToast(null)}
+					/>
+				) : null}
+			</AnimatePresence>
 		</div>
 	);
 }
