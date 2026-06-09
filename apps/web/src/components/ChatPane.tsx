@@ -29,8 +29,7 @@ import {
   DESIGN_SYSTEM_WORKSPACE_DISPLAY_TITLE,
   isDesignSystemWorkspacePrompt,
 } from '../design-system-auto-prompt';
-import { latestTodoWriteInputForPinnedCard } from '../runtime/todos';
-import { TodoCard } from './ToolCard';
+import { isTodoWriteToolName, latestTodoWriteInputForPinnedCard } from '../runtime/todos';
 import type { AppConfig, ChatAttachment, ChatCommentAttachment, ChatMessage, ChatMessageFeedbackChange, Conversation, DesignSystemSummary, PreviewComment, Project, ProjectFile, ProjectMetadata, SkillSummary } from '../types';
 import { exactDateTime, messageTime, shortTime } from '../utils/chatTime';
 import { commentTargetDisplayName, commentsToAttachments, simplePositionLabel } from '../comments';
@@ -745,7 +744,6 @@ export function ChatPane({
   const composerRef = useRef<ChatComposerHandle | null>(null);
   const composerSlotRef = useRef<HTMLDivElement | null>(null);
   const composerLayerRef = useRef<HTMLDivElement | null>(null);
-  const pinnedTodoRef = useRef<HTMLDivElement | null>(null);
   const queuedSendStripRef = useRef<HTMLDivElement | null>(null);
   const didInitialScrollRef = useRef(false);
   const runFailedToastSurfaceKeysRef = useRef<Set<string>>(new Set());
@@ -807,34 +805,6 @@ export function ChatPane({
     bottom: number;
   } | null>(null);
   const [composerSlotHeight, setComposerSlotHeight] = useState(0);
-  // The user can dismiss the pinned task list once everything is complete.
-  // We key the dismissal on the snapshot (serialized TodoWrite input) so
-  // the next time the agent emits a different snapshot the card returns,
-  // but the same snapshot stays hidden across renders / streaming ticks.
-  // Persisted to sessionStorage so the dismissal survives tab switches and
-  // component remounts (the ChatPane key includes conversationId, so switching
-  // conversations unmounts and remounts the component). The stored value is the
-  // snapshot key, so a fresh TodoWrite snapshot still re-shows the card.
-  const dismissedStorageKey = `dismissedTodo:${activeConversationId ?? 'none'}`;
-  const [dismissedPinnedTodoKey, setDismissedPinnedTodoKey] = useState<string | null>(() => {
-    try {
-      return sessionStorage.getItem(dismissedStorageKey);
-    } catch {
-      return null;
-    }
-  });
-  // Sync dismissed state when conversationId changes (e.g., tab switching).
-  // The parent key includes conversationId so unmount/remount resets this,
-  // but if conversationId changes without unmounting or the storage key
-  // changes, re-read to keep the dismissed state in sync.
-  useEffect(() => {
-    try {
-      const stored = sessionStorage.getItem(dismissedStorageKey);
-      setDismissedPinnedTodoKey(stored);
-    } catch {
-      // sessionStorage access can fail in private browsing
-    }
-  }, [dismissedStorageKey]);
   const [editingQueuedSendId, setEditingQueuedSendId] = useState<string | null>(null);
   // Reverse scan (no array copy) + memo so this and the maps below don't
   // recompute on every non-`messages` render (scroll, hover, toggles).
@@ -1357,24 +1327,7 @@ export function ChatPane({
       }
     };
 
-    // The PinnedTodoSlot renders outside the scroll container. When the todo
-    // card grows, the chat-log's clientHeight shrinks (flex layout) and the
-    // user drifts away from the bottom. Observe the pinned-todo div so
-    // followLatestIfPinned fires whenever the card changes height.
-    let observedPinnedTodo: Element | null = null;
     let observedQueuedSendStrip: Element | null = null;
-    const syncPinnedTodo = () => {
-      if (!resizeObserver) return;
-      const pinnedEl = pinnedTodoRef.current;
-      if (pinnedEl && observedPinnedTodo !== pinnedEl) {
-        if (observedPinnedTodo) resizeObserver.unobserve(observedPinnedTodo);
-        resizeObserver.observe(pinnedEl);
-        observedPinnedTodo = pinnedEl;
-      } else if (!pinnedEl && observedPinnedTodo) {
-        resizeObserver.unobserve(observedPinnedTodo);
-        observedPinnedTodo = null;
-      }
-    };
     const syncQueuedSendStrip = () => {
       if (!resizeObserver) return;
       const queuedEl = queuedSendStripRef.current;
@@ -1391,14 +1344,12 @@ export function ChatPane({
     };
 
     syncObservedChildren();
-    syncPinnedTodo();
     syncQueuedSendStrip();
 
     const mutationObserver =
       typeof MutationObserver !== 'undefined'
         ? new MutationObserver(() => {
             syncObservedChildren();
-            syncPinnedTodo();
             syncQueuedSendStrip();
             followLatestIfPinned();
           })
@@ -1411,11 +1362,11 @@ export function ChatPane({
       childList: true,
       subtree: true,
     });
-    // PinnedTodoSlot and QueuedSendStrip live outside the chat-log subtree
-    // (they are siblings of .chat-log-wrap inside .pane). The
-    // MutationObserver above only fires for changes inside el, so it cannot
-    // detect those surfaces mounting or unmounting. Watch the nearest common
-    // ancestor (.pane) with childList-only to keep their observers current.
+    // QueuedSendStrip lives outside the chat-log subtree (it is a sibling of
+    // .chat-log-wrap inside .pane). The MutationObserver above only fires for
+    // changes inside el, so it cannot detect that surface mounting or
+    // unmounting. Watch the nearest common ancestor (.pane) with childList-only
+    // to keep its observer current.
     const paneEl = el.parentElement?.parentElement ?? null;
     if (paneEl && mutationObserver) {
       mutationObserver.observe(paneEl, { childList: true });
@@ -2096,24 +2047,6 @@ export function ChatPane({
               <span>{t('chat.jumpToLatest')}</span>
             </button>
           </div>
-          <PinnedTodoSlot
-            messages={messages}
-            streaming={streaming}
-            dismissedKey={dismissedPinnedTodoKey}
-            onDismiss={(key) => {
-              setDismissedPinnedTodoKey(key);
-              try {
-                if (key) {
-                  sessionStorage.setItem(dismissedStorageKey, key);
-                } else {
-                  sessionStorage.removeItem(dismissedStorageKey);
-                }
-              } catch {
-                // sessionStorage access can fail in private browsing / sandboxed contexts
-              }
-            }}
-            containerRef={pinnedTodoRef}
-          />
           <QueuedSendStrip
             containerRef={queuedSendStripRef}
             items={queuedItems}
@@ -2267,6 +2200,14 @@ function ChatRows({
   scrollContainerRef: MutableRefObject<HTMLDivElement | null>;
 }) {
   const items = useMemo(() => buildChatRenderItems(messages), [messages]);
+  const conversationTodoInput = useMemo(
+    () => latestTodoWriteInputForPinnedCard(messages),
+    [messages],
+  );
+  const conversationTodoAnchorMessageId = useMemo(
+    () => firstTodoWriteMessageId(messages),
+    [messages],
+  );
   const virtualized = items.length > CHAT_MESSAGE_VIRTUALIZE_THRESHOLD;
   const virtualWindow = useMeasuredVirtualWindow(items, {
     enabled: virtualized,
@@ -2316,6 +2257,8 @@ function ChatRows({
         // get a stable `undefined`, so adding `liveToolInput` to the memo
         // comparator re-renders just this row per `tool_input_delta`, not all N.
         liveToolInput={messageStreaming ? liveToolInput : undefined}
+        showConversationTodoCard={m.id === conversationTodoAnchorMessageId}
+        conversationTodoInput={conversationTodoInput}
         projectId={projectId}
         projectKind={projectKindForTracking}
         conversationId={activeConversationId}
@@ -2452,6 +2395,17 @@ function buildChatRenderItems(messages: ChatMessage[]): ChatRenderItem[] {
     });
   }
   return items;
+}
+
+function firstTodoWriteMessageId(messages: ChatMessage[]): string | null {
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue;
+    const events = message.events ?? [];
+    if (events.some((event) => event.kind === 'tool_use' && isTodoWriteToolName(event.name))) {
+      return message.id;
+    }
+  }
+  return null;
 }
 
 function estimateChatRenderItemHeight(item: ChatRenderItem): number {
@@ -2604,57 +2558,6 @@ function useMeasuredVirtualWindow<T extends { key: string }>(
     totalHeight: layout.totalHeight,
     onMeasure,
   };
-}
-
-// Pinned task list above the chat composer. The latest TodoWrite snapshot
-// across the entire conversation is the canonical state; AssistantMessage
-// no longer renders these inline so there is exactly one TodoCard on
-// screen. When every task is complete the user can dismiss the card; the
-// dismissal sticks to the current snapshot only, so a fresh TodoWrite
-// from the agent re-shows it.
-function PinnedTodoSlot({
-  messages,
-  streaming,
-  dismissedKey,
-  onDismiss,
-  containerRef,
-}: {
-  messages: ChatMessage[];
-  streaming: boolean;
-  dismissedKey: string | null;
-  onDismiss: (key: string | null) => void;
-  containerRef?: MutableRefObject<HTMLDivElement | null>;
-}) {
-  // `exiting` lets the dismiss click play a slide-down transition before
-  // the slot tears down. Without it React would unmount immediately and
-  // the card would pop out without animation.
-  const [exiting, setExiting] = useState(false);
-  const input = latestTodoWriteInputForPinnedCard(messages);
-  if (input == null) return null;
-  let snapshotKey: string;
-  try {
-    snapshotKey = JSON.stringify(input);
-  } catch {
-    snapshotKey = String(input);
-  }
-  if (snapshotKey === dismissedKey) return null;
-  return (
-    <div className={`chat-pinned-todo${exiting ? ' chat-pinned-todo-exit' : ''}`} ref={containerRef}>
-      <TodoCard
-        input={input}
-        runStreaming={streaming}
-        runSucceeded={!streaming}
-        onDismiss={() => {
-          if (exiting) return;
-          setExiting(true);
-          // Match the slide-out duration in CSS (220ms) — once the
-          // transition completes the snapshot key is recorded as
-          // dismissed and the slot is unmounted by the early return.
-          window.setTimeout(() => onDismiss(snapshotKey), 220);
-        }}
-      />
-    </div>
-  );
 }
 
 function QueuedSendStrip({

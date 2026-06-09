@@ -241,6 +241,174 @@ test('gemini stream handles real stream-json user, tool, and error frames', () =
   ]);
 });
 
+test('gemini stream emits TodoWrite from native write_todos tool', () => {
+  const { events, handler } = collectEvents('gemini');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'tool_use',
+      tool_name: 'write_todos',
+      tool_id: 'write_todos__1',
+      parameters: {
+        todos: [
+          { description: 'Inspect context', status: 'in_progress' },
+          { description: 'Answer user', status: 'pending' },
+          { description: 'Wait for input', status: 'blocked' },
+        ],
+      },
+    }) +
+    '\n',
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'tool_use',
+      id: 'write_todos__1:todo-native',
+      name: 'TodoWrite',
+      input: {
+        todos: [
+          { content: 'Inspect context', status: 'in_progress' },
+          { content: 'Answer user', status: 'pending' },
+          { content: 'Wait for input', status: 'stopped' },
+        ],
+      },
+    },
+    {
+      type: 'tool_use',
+      id: 'write_todos__1',
+      name: 'write_todos',
+      input: {
+        todos: [
+          { description: 'Inspect context', status: 'in_progress' },
+          { description: 'Answer user', status: 'pending' },
+          { description: 'Wait for input', status: 'blocked' },
+        ],
+      },
+    },
+  ]);
+});
+
+test('gemini stream normalizes suffixed native todo statuses', () => {
+  const { events, handler } = collectEvents('gemini');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'tool_use',
+      tool_name: 'write_todos',
+      tool_id: 'write_todos__extra',
+      parameters: {
+        todos: [
+          { description: 'Bind tokens', status: 'in_progressExtra' },
+          { description: 'Write page', status: 'pendingExtra' },
+          { description: 'Ship page', status: 'completedExtra' },
+        ],
+      },
+    }) +
+    '\n',
+  );
+
+  assert.deepEqual(events[0], {
+    type: 'tool_use',
+    id: 'write_todos__extra:todo-native',
+    name: 'TodoWrite',
+    input: {
+      todos: [
+        { content: 'Bind tokens', status: 'in_progress' },
+        { content: 'Write page', status: 'pending' },
+        { content: 'Ship page', status: 'completed' },
+      ],
+    },
+  });
+});
+
+test('gemini stream suppresses duplicate artifact text after file writes', () => {
+  const { events, handler } = collectEvents('gemini');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'tool_use',
+      tool_name: 'write_file',
+      tool_id: 'write_file__1',
+      parameters: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    }) +
+    '\n' +
+    JSON.stringify({
+      type: 'message',
+      role: 'assistant',
+      content: 'Done.\\n\\n<artifact identifier="page" type="text/html">\\n<!doctype html><html></html>\\n</artifact>',
+    }) +
+    '\n',
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'tool_use',
+      id: 'write_file__1',
+      name: 'write_file',
+      input: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    },
+    {
+      type: 'text_delta',
+      delta: 'Done.\\n\\n',
+    },
+  ]);
+});
+
+test('gemini stream suppresses duplicate artifact text split across chunks', () => {
+  const { events, handler } = collectEvents('gemini');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'tool_use',
+      tool_name: 'write_file',
+      tool_id: 'write_file__1',
+      parameters: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    }) +
+    '\n' +
+    JSON.stringify({
+      type: 'message',
+      role: 'assistant',
+      content: 'Done.\\n\\n<',
+    }) +
+    '\n' +
+    JSON.stringify({
+      type: 'message',
+      role: 'assistant',
+      content: 'artifact identifier="page" type="text/html">\\n<!doctype html><html></html>\\n</artifact>Tail',
+    }) +
+    '\n',
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'tool_use',
+      id: 'write_file__1',
+      name: 'write_file',
+      input: {
+        file_path: 'index.html',
+        content: '<!doctype html><html></html>',
+      },
+    },
+    {
+      type: 'text_delta',
+      delta: 'Done.\\n\\n',
+    },
+    {
+      type: 'text_delta',
+      delta: 'Tail',
+    },
+  ]);
+});
+
 test('gemini stream treats terminal error frames as fatal error events', () => {
   const { events, handler } = collectEvents('gemini');
 
@@ -522,6 +690,62 @@ test('codex json stream emits command execution tool events', () => {
       toolUseId: 'item-1',
       content: 'hello-from-codex\n',
       isError: false,
+    },
+  ]);
+});
+
+test('codex json stream emits TodoWrite events from todo_list items', () => {
+  const { events, handler } = collectEvents('codex');
+
+  handler.feed(
+    JSON.stringify({
+      type: 'item.started',
+      item: {
+        id: 'item-0',
+        type: 'todo_list',
+        items: [
+          { text: 'Inspect workspace', completed: false },
+          { text: 'Write prototype', completed: false },
+        ],
+      },
+    }) +
+    '\n' +
+    JSON.stringify({
+      type: 'item.updated',
+      item: {
+        id: 'item-0',
+        type: 'todo_list',
+        items: [
+          { text: 'Inspect workspace', completed: true },
+          { text: 'Write prototype', completed: false },
+        ],
+      },
+    }) +
+    '\n',
+  );
+
+  assert.deepEqual(events, [
+    {
+      type: 'tool_use',
+      id: 'item-0',
+      name: 'TodoWrite',
+      input: {
+        todos: [
+          { content: 'Inspect workspace', status: 'pending' },
+          { content: 'Write prototype', status: 'pending' },
+        ],
+      },
+    },
+    {
+      type: 'tool_use',
+      id: 'item-0',
+      name: 'TodoWrite',
+      input: {
+        todos: [
+          { content: 'Inspect workspace', status: 'completed' },
+          { content: 'Write prototype', status: 'pending' },
+        ],
+      },
     },
   ]);
 });
