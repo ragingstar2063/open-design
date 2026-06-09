@@ -937,6 +937,67 @@ describe('ProjectView conversation run isolation', () => {
     }));
   });
 
+  it('does not surface a stale failure banner when the interrupted run errors late', async () => {
+    const queuedSend = {
+      id: 'queued-1',
+      conversationId: 'conv-a',
+      prompt: 'hello from c',
+      attachments: [],
+      commentAttachments: [],
+      createdAt: 1,
+    };
+    window.localStorage.setItem(
+      'od:chat-queued-sends:project-1:v1',
+      JSON.stringify([queuedSend]),
+    );
+
+    conversationAMessages = [];
+    const daemonRuns: Array<{
+      handlers: { onDone: (fullText?: string) => void; onError: (err: Error) => void };
+      onRunCreated?: (runId: string) => void;
+      onRunStatus?: (status: NonNullable<ChatMessage['runStatus']>) => void;
+    }> = [];
+    streamViaDaemon.mockImplementation(async (input: unknown) => {
+      const options = input as {
+        handlers: { onDone: (fullText?: string) => void; onError: (err: Error) => void };
+        onRunCreated?: (runId: string) => void;
+        onRunStatus?: (status: NonNullable<ChatMessage['runStatus']>) => void;
+      };
+      daemonRuns.push(options);
+      options.onRunCreated?.(`run-${daemonRuns.length}`);
+      options.onRunStatus?.('running');
+    });
+
+    renderProjectView(
+      config,
+      project,
+      [{ id: 'agent-1', name: 'OpenCode', bin: 'opencode', available: true, models: [] }],
+    );
+
+    await waitFor(() => expect(screen.getByTestId('active-conversation').textContent).toBe('conv-a'));
+    await waitFor(() => expect(screen.getByTestId('send-message')).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByTestId('send-message'));
+
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByTestId('send-queued-0')).toBeTruthy());
+
+    // Interrupt: send-now stops the first run and flushes the queued send.
+    fireEvent.click(screen.getByTestId('send-queued-0'));
+    await waitFor(() => expect(streamViaDaemon).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('streaming-state').textContent).toBe('streaming'));
+
+    // The superseded run loses its terminal SSE and surfaces a late error. It
+    // must not paint a global failure banner over the live replacement run.
+    await act(async () => {
+      daemonRuns[0]?.handlers.onError(new Error('daemon stream disconnected before run completed'));
+    });
+
+    expect(screen.getByTestId('chat-error').textContent).toBe('');
+    expect(screen.getByTestId('streaming-state').textContent).toBe('streaming');
+    expect(screen.getByTestId('conversation-latest-runs').textContent).toContain('conv-a:running');
+  });
+
   it('auto-starts queued sends one at a time after the active run completes', async () => {
     let finishReattach: (() => void) | null = null;
     let reattachHandlers: { onDone: () => void } | null = null;
