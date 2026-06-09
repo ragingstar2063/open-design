@@ -12,6 +12,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Button } from '@open-design/components';
 import { useI18n, useT } from '../i18n';
+import { localizePluginDescription, localizePluginTitle } from './plugins-home/localization';
 import type { Dict, Locale } from '../i18n/types';
 import {
   localizeSkillDescription,
@@ -20,11 +21,18 @@ import {
 import { useAnalytics } from '../analytics/provider';
 import {
   trackChatPanelClick,
+  trackComposerBarClick,
+  trackComposerSessionModeClick,
+  trackDesignToolboxClick,
   trackFileUploadResult,
 } from '../analytics/events';
+import { sessionModeToTracking } from '@open-design/contracts/analytics';
+import type {
+  ComposerBarClickProps,
+  DesignToolboxClickProps,
+} from '@open-design/contracts/analytics';
 import { deriveUploadCohort } from '../analytics/upload-tracking';
-import { IMAGE_MODELS } from "../media/models";
-import { projectRawUrl, uploadProjectFiles, openFolderDialog, fetchConnectors } from "../providers/registry";
+import { projectRawUrl, uploadProjectFiles, openFolderDialog } from "../providers/registry";
 import { patchProject } from "../state/projects";
 import { fetchMcpServers } from "../state/mcp";
 import type { McpServerConfig, McpTemplate } from "../state/mcp";
@@ -44,11 +52,13 @@ import type {
 import { buildVisualAnnotationAttachment, commentTargetDisplayName } from '../comments';
 import { Icon, type IconName } from "./Icon";
 import { SessionModeToggle } from './SessionModeToggle';
+import { ComposerPlusMenu } from './ComposerPlusMenu';
 import { PluginDetailsModal } from "./PluginDetailsModal";
 import { PluginsSection, type PluginsSectionHandle } from "./PluginsSection";
 import { BUILT_IN_PETS, CUSTOM_PET_ID } from "./pet/pets";
 import {
   inlineMentionToken,
+  mentionTokenPresent,
   type InlineMentionEntity,
 } from '../utils/inlineMentions';
 import {
@@ -58,8 +68,9 @@ import {
 } from './composer/LexicalComposerInput';
 import { CaretFloatingLayer } from './composer/CaretFloatingLayer';
 import { ANNOTATION_EVENT, type AnnotationEventDetail } from "./PreviewDrawOverlay";
-import { SearchableModelSelect } from './modelOptions';
 import { DesignSystemSwitchPicker } from "./DesignSystemSwitchPicker";
+import { listenForConnectorsChanged } from './connectors-events';
+import { fetchConnectorCatalogSnapshot } from './connectors-state';
 
 type TranslateFn = (key: keyof Dict, vars?: Record<string, string | number>) => string;
 
@@ -201,6 +212,7 @@ const DESIGN_TOOLBOX_ACTIONS: DesignToolboxAction[] = [
 interface Props {
   projectId: string | null;
   projectFiles: ProjectFile[];
+  activeProjectFileName?: string | null;
   streaming: boolean;
   sessionMode?: ChatSessionMode;
   onSessionModeChange?: (mode: ChatSessionMode) => void;
@@ -233,6 +245,11 @@ interface Props {
   // Opens settings on the External MCP tab. Wired from ChatPane → App.
   // The composer's `/mcp` slash command and the MCP picker button route here.
   onOpenMcpSettings?: () => void;
+  // The "+" menu's "add plugin" / "add connector" rows route to the home
+  // surfaces (plugin registry / connector integrations). Wired from
+  // ChatPane → ProjectView → App. Omitted → the add rows are hidden.
+  onBrowsePlugins?: () => void;
+  onOpenConnectors?: () => void;
   // Optional pet wiring. The composer no longer renders a visible pet
   // entry, but existing manual `/pet` commands still route here.
   petConfig?: AppConfig['pet'];
@@ -244,14 +261,20 @@ interface Props {
   onProjectMetadataChange?: (metadata: ProjectMetadata) => void;
   activeWorkspaceContext?: WorkspaceContextItem | null;
   workspaceContexts?: WorkspaceContextItem[];
-  // SenseAudio BYOK image-model picker shown above the textarea. Hidden
-  // when the active chat protocol is anything other than 'senseaudio',
-  // so the composer stays clean for every other BYOK tab. The state
-  // owner is ProjectView (per-session, reset on refresh); ChatComposer
-  // is a fully controlled select.
+  // BYOK image-model picker shown above the textarea for protocols that
+  // inject the daemon-side generate_image tool (SenseAudio, AIHubMix).
+  // Hidden for every other BYOK tab so the composer stays clean. The
+  // state owner is ProjectView (per-session, reset on refresh);
+  // ChatComposer is a fully controlled select.
   byokApiProtocol?: AppConfig['apiProtocol'];
   byokImageModel?: string;
   onChangeByokImageModel?: (model: string) => void;
+  byokVideoModel?: string;
+  onChangeByokVideoModel?: (model: string) => void;
+  byokSpeechModel?: string;
+  onChangeByokSpeechModel?: (model: string) => void;
+  byokSpeechVoice?: string;
+  onChangeByokSpeechVoice?: (voice: string) => void;
   currentSkillId?: string | null;
   onProjectSkillChange?: (skillId: string | null) => void;
   // Set when the project was created with a plugin already pinned
@@ -264,6 +287,10 @@ interface Props {
   // ChatPane). Pass `null` (or omit) to render the full rail.
   pinnedPluginId?: string | null;
   footerAccessory?: ReactNode;
+  // Slot rendered in the composer's bottom toolbar, immediately right of the
+  // "+" menu. Hosts the working-directory pill so the folder selector sits by
+  // the composer (mirroring the home input) instead of the file-panel header.
+  leadingAccessory?: ReactNode;
   // Design-system picker slot rendered at the top of the composer (above
   // the textarea). The former standalone chrome header row was removed;
   // ProjectView owns the project record so it renders the picker as a slot.
@@ -309,6 +336,10 @@ export interface ChatSendMeta {
   context?: RunContextSelection;
   appliedPluginSnapshot?: AppliedPluginSnapshot;
   appliedPluginSnapshotId?: string;
+  inlineAppliedPlugin?: {
+    pluginId: string;
+    label: string;
+  };
   // Per-turn skill ids picked via the @-mention popover. The chat layer
   // forwards these to the daemon's `skillIds` field so the system prompt
   // for this run only is composed with the extra skill bodies, without
@@ -330,6 +361,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     {
       projectId,
       projectFiles,
+      activeProjectFileName = null,
       streaming,
       sessionMode = 'design',
       onSessionModeChange,
@@ -343,6 +375,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       onSend,
       onStop,
       onOpenMcpSettings,
+      onBrowsePlugins,
+      onOpenConnectors,
       petConfig,
       onAdoptPet,
       onTogglePet,
@@ -355,10 +389,17 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       byokApiProtocol,
       byokImageModel,
       onChangeByokImageModel,
+      byokVideoModel,
+      onChangeByokVideoModel,
+      byokSpeechModel,
+      onChangeByokSpeechModel,
+      byokSpeechVoice,
+      onChangeByokSpeechVoice,
       currentSkillId = null,
       onProjectSkillChange,
       pinnedPluginId = null,
       footerAccessory,
+      leadingAccessory,
       designSystemPicker,
       currentDesignSystemId = null,
       onActiveDesignSystemChange,
@@ -368,7 +409,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
   ) {
     const t = useT();
     const analytics = useAnalytics();
+    const activeFileContext =
+      projectMetadata?.importedFrom === 'folder' && activeProjectFileName
+        ? activeProjectFileName
+        : null;
+    const activeFileDisplayName = activeFileContext ? lastPathSegment(activeFileContext) : null;
     const [draft, setDraft] = useState(() => initialDraft ?? loadComposerDraft(draftStorageKey) ?? "");
+    const composerRootRef = useRef<HTMLDivElement | null>(null);
     // Synchronous mirror of `draft`. Event handlers that mutate the draft off
     // a captured render closure (notably the annotation listener, where two
     // uploads can resolve concurrently) read/write this ref so their edits
@@ -400,9 +447,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // Lexical owns the caret, so the mention/slash trigger state only carries
     // the typed query — no cursor offset.
     const [mention, setMention] = useState<{ q: string } | null>(null);
-    // Active-row index for the @-popover's visible union (files → plugins →
-    // skills → mcp → connectors). Resets to 0 whenever the query identity or
-    // tab changes; drives the visual highlight + Enter/Tab target.
+    // Active-row index for the @-popover's visible union (files → tabs →
+    // plugins → skills → mcp → connectors). Resets to 0 whenever the query
+    // identity or tab changes; drives the visual highlight + Enter/Tab target.
     const [mentionIndex, setMentionIndex] = useState(0);
     const [mentionTab, setMentionTab] = useState<MentionTab>('all');
     // Viewport caret box the floating popover anchors against. Sampled by the
@@ -432,13 +479,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     const [activeAppliedPlugin, setActiveAppliedPlugin] =
       useState<AppliedPluginSnapshot | null>(null);
     const pluginsSectionRef = useRef<PluginsSectionHandle | null>(null);
+    const inlineBackedPluginRef = useRef<{ id: string; label: string } | null>(null);
     // Consolidated "tools" popover — a single dropdown anchored to the
     // leading sliders icon that hosts project context, MCP, Import actions,
     // and a shortcut to open the full Settings dialog. Replaces the previous
     // row of three standalone buttons (which overflowed in narrow chats).
-    const [toolsOpen, setToolsOpen] = useState(false);
-    const [toolsTab, setToolsTab] = useState<ToolsTab>('plugins');
-    const [designToolboxOpen, setDesignToolboxOpen] = useState(false);
+    // The "+" menu (ComposerPlusMenu) owns its own open / submenu state.
     // Defer the (large) plugin / MCP / connector fetches until the composer is
     // actually used — first focus, the tools popover opening, an @/slash
     // trigger, or a pre-seeded draft. An untouched empty composer (e.g. a home
@@ -452,10 +498,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // host. Replaces the old textareaRef + manual selection plumbing. IME
     // composition guarding now lives inside the editor's command handlers.
     const editorRef = useRef<LexicalComposerInputHandle | null>(null);
-    const toolsMenuRef = useRef<HTMLDivElement | null>(null);
-    const toolsTriggerRef = useRef<HTMLButtonElement | null>(null);
-    const designToolboxMenuRef = useRef<HTMLDivElement | null>(null);
-    const designToolboxTriggerRef = useRef<HTMLButtonElement | null>(null);
     const petEnabled = Boolean(onAdoptPet && onTogglePet);
     const linkedDirs = projectMetadata?.linkedDirs ?? [];
     const visibleWorkspaceContext =
@@ -505,52 +547,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       setDismissedWorkspaceContextId(null);
     }, [activeWorkspaceContextId]);
 
-    useEffect(() => {
-      if (!toolsOpen) return;
-      function onPointer(e: MouseEvent) {
-        const target = e.target as Node;
-        if (toolsMenuRef.current?.contains(target)) return;
-        if (toolsTriggerRef.current?.contains(target)) return;
-        setToolsOpen(false);
-      }
-      function onKey(e: KeyboardEvent) {
-        if (e.key === 'Escape') setToolsOpen(false);
-      }
-      document.addEventListener('mousedown', onPointer);
-      document.addEventListener('keydown', onKey);
-      return () => {
-        document.removeEventListener('mousedown', onPointer);
-        document.removeEventListener('keydown', onKey);
-      };
-    }, [toolsOpen]);
-
-    useEffect(() => {
-      if (!designToolboxOpen) return;
-      function onPointer(e: MouseEvent) {
-        const target = e.target as Node;
-        if (designToolboxMenuRef.current?.contains(target)) return;
-        if (designToolboxTriggerRef.current?.contains(target)) return;
-        setDesignToolboxOpen(false);
-      }
-      function onKey(e: KeyboardEvent) {
-        if (e.key === 'Escape') setDesignToolboxOpen(false);
-      }
-      document.addEventListener('mousedown', onPointer);
-      document.addEventListener('keydown', onKey);
-      return () => {
-        document.removeEventListener('mousedown', onPointer);
-        document.removeEventListener('keydown', onKey);
-      };
-    }, [designToolboxOpen]);
-
     // Latch `composerEngaged` true on the first real interaction so the
     // deferred fetches below run exactly once, when they are actually needed.
     useEffect(() => {
       if (composerEngaged) return;
-      if (draft.trim().length > 0 || toolsOpen || designToolboxOpen || mention || slash) {
+      if (draft.trim().length > 0 || mention || slash) {
         setComposerEngaged(true);
       }
-    }, [composerEngaged, designToolboxOpen, draft, toolsOpen, mention, slash]);
+    }, [composerEngaged, draft, mention, slash]);
 
     // Lazy-fetch the user's external MCP servers list (once engaged) so the
     // `/mcp …` slash palette and the composer's MCP button popover have
@@ -594,7 +598,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     useEffect(() => {
       if (!composerEngaged) return;
       let cancelled = false;
-      void fetchConnectors().then((rows) => {
+      void fetchConnectorCatalogSnapshot().then((rows) => {
         if (cancelled) return;
         setConnectors(rows.filter((connector) => connector.status === 'connected'));
       });
@@ -602,6 +606,29 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         cancelled = true;
       };
     }, [composerEngaged]);
+
+    useEffect(() => {
+      if (!composerEngaged) return;
+      let cancelled = false;
+      async function refreshConnectors() {
+        const rows = await fetchConnectorCatalogSnapshot({ refreshDiscovery: true });
+        if (cancelled) return;
+        setConnectors(rows.filter((connector) => connector.status === 'connected'));
+      }
+      const stopListening = listenForConnectorsChanged(() => void refreshConnectors());
+      return () => {
+        cancelled = true;
+        stopListening();
+      };
+    }, [composerEngaged]);
+
+    useEffect(() => {
+      const inlinePlugin = inlineBackedPluginRef.current;
+      if (!activeAppliedPlugin || inlinePlugin?.id !== activeAppliedPlugin.pluginId) return;
+      if (mentionTokenPresent(draft, inlinePlugin.label)) return;
+      inlineBackedPluginRef.current = null;
+      pluginsSectionRef.current?.clear();
+    }, [activeAppliedPlugin, draft]);
 
     // Composer-side plugin list: hide bundled atoms (pipeline-only). Keep
     // the full installed list available even when the project was created
@@ -619,6 +646,20 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       () => mcpServers.filter((s) => s.enabled),
       [mcpServers],
     );
+
+    function inlineBackedPluginFromRestoredDraft(
+      text: string,
+      appliedPlugin: AppliedPluginSnapshot | null | undefined,
+      meta: ChatSendMeta | undefined,
+    ): { id: string; label: string } | null {
+      if (!appliedPlugin) return null;
+      const restoredInline = meta?.inlineAppliedPlugin;
+      if (restoredInline?.pluginId !== appliedPlugin.pluginId) return null;
+      return mentionTokenPresent(text, restoredInline.label)
+        ? { id: appliedPlugin.pluginId, label: restoredInline.label }
+        : null;
+    }
+
     const designToolboxResourceIndex = useMemo<DesignToolboxResourceIndex>(
       () => ({
         skills,
@@ -646,30 +687,6 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     // Resolve which tabs to surface in the consolidated tools popover.
     // Plugins is always visible while a project is active so users can
     // apply context without leaving the composer. MCP shows when wired by
-    // the parent (App); Import is always available. Pet controls stay out
-    // of the project context picker so the @ panel remains project-scoped.
-    const availableTabs = useMemo<ToolsTab[]>(() => {
-      const tabs: ToolsTab[] = [];
-      if (projectId) {
-        tabs.push('plugins');
-        tabs.push('skills');
-      }
-      if (onOpenMcpSettings) tabs.push('mcp');
-      tabs.push('import');
-      return tabs;
-    }, [projectId, onOpenMcpSettings]);
-
-    // When the popover opens, snap the active tab to the first available one
-    // so the user never lands on an empty / hidden tab if their config
-    // changes mid-session.
-    useEffect(() => {
-      if (!toolsOpen) return;
-      if (!availableTabs.includes(toolsTab)) {
-        const first = availableTabs[0];
-        if (first) setToolsTab(first);
-      }
-    }, [toolsOpen, availableTabs, toolsTab]);
-
     // Catalog of supported slash commands. Each entry shows up in the
     // popover when the user types `/` in the composer. The `insert`
     // value is what we drop into the draft when the user picks the
@@ -881,7 +898,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               : [],
           );
           setStagedWorkspaceContexts(ctx?.workspaceItems ?? []);
-          setActiveAppliedPlugin(meta?.appliedPluginSnapshot ?? null);
+          const restoredAppliedPlugin = meta?.appliedPluginSnapshot ?? null;
+          setActiveAppliedPlugin(restoredAppliedPlugin);
+          inlineBackedPluginRef.current = inlineBackedPluginFromRestoredDraft(
+            text,
+            restoredAppliedPlugin,
+            meta,
+          );
           setUploadError(null);
           setMention(null);
           setSlash(null);
@@ -893,7 +916,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           editorRef.current?.focus();
         },
       }),
-      [connectors, mcpServers, skills]
+      [connectors, mcpServers, pluginsForComposer, skills]
     );
 
     function reset() {
@@ -905,6 +928,9 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       setStagedMcpServers([]);
       setStagedConnectors([]);
       setStagedWorkspaceContexts([]);
+      pluginsSectionRef.current?.clear();
+      inlineBackedPluginRef.current = null;
+      setActiveAppliedPlugin(null);
       setUploadError(null);
       setMention(null);
       setMentionTab('all');
@@ -940,6 +966,14 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           ? {
               appliedPluginSnapshot: activeAppliedPlugin,
               appliedPluginSnapshotId: activeAppliedPlugin.snapshotId,
+              ...(inlineBackedPluginRef.current?.id === activeAppliedPlugin.pluginId
+                ? {
+                    inlineAppliedPlugin: {
+                      pluginId: activeAppliedPlugin.pluginId,
+                      label: inlineBackedPluginRef.current.label,
+                    },
+                  }
+                : {}),
             }
           : {}),
         ...(Object.keys(context).length > 0 ? { context } : {}),
@@ -955,13 +989,62 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     ): boolean {
       setStreamingAnnotationSendPending(false);
       if (!prompt && attachments.length === 0 && nextCommentAttachments.length === 0) return false;
-      onSend(prompt, attachments, nextCommentAttachments, meta);
+      const nextAttachments =
+        activeFileContext && !attachments.some((attachment) => attachment.path === activeFileContext)
+          ? [
+              {
+                path: activeFileContext,
+                name: activeFileDisplayName ?? activeFileContext,
+                kind: 'file' as const,
+              },
+              ...attachments,
+            ]
+          : attachments;
+      onSend(prompt, nextAttachments, nextCommentAttachments, meta);
       reset();
       return true;
     }
 
     function queueMeta(meta?: ChatSendMeta): ChatSendMeta {
       return { ...(meta ?? {}), queueOnly: true };
+    }
+
+    function reserveAttachmentOrders(count: number): number {
+      const orderStart = Math.max(nextAttachmentOrderRef.current, nextChatAttachmentOrder(staged));
+      nextAttachmentOrderRef.current = orderStart + count;
+      return orderStart;
+    }
+
+    function appendOrderedStagedAttachments(attachments: ChatAttachment[]) {
+      if (attachments.length === 0) return;
+      setStaged((current) => {
+        const knownPaths = new Set(current.map((attachment) => attachment.path));
+        const nextAttachments = attachments.filter((attachment) => !knownPaths.has(attachment.path));
+        if (nextAttachments.length === 0) return current;
+        const next = sortChatAttachmentsByOrder([...current, ...nextAttachments]);
+        nextAttachmentOrderRef.current = Math.max(
+          nextAttachmentOrderRef.current,
+          nextChatAttachmentOrder(next),
+        );
+        return next;
+      });
+    }
+
+    function appendContextAttachment(filePath: string) {
+      setStaged((current) => {
+        if (current.some((item) => item.path === filePath)) return current;
+        const order = Math.max(nextAttachmentOrderRef.current, nextChatAttachmentOrder(current));
+        nextAttachmentOrderRef.current = order + 1;
+        return sortChatAttachmentsByOrder([
+          ...current,
+          {
+            path: filePath,
+            name: filePath.split("/").pop() || filePath,
+            kind: looksLikeImage(filePath) ? "image" : "file",
+            order,
+          },
+        ]);
+      });
     }
 
     function replaceEditorDraft(text: string) {
@@ -1006,8 +1089,44 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
     function applyDesignToolboxDraft(prompt: string) {
       replaceEditorDraft(prompt);
-      setDesignToolboxOpen(false);
       editorRef.current?.focus();
+    }
+
+    // Fills the fixed page/area/project context for the rest of the composer
+    // bottom bar (plus menu, design-system / working-dir switch, agent
+    // selector, context-chip removal).
+    const trackComposerBar = (
+      fields: Omit<ComposerBarClickProps, 'page_name' | 'area' | 'project_id'>,
+    ) => {
+      trackComposerBarClick(analytics.track, {
+        page_name: 'chat_panel',
+        area: 'chat_composer',
+        ...(projectId ? { project_id: projectId } : {}),
+        ...fields,
+      });
+    };
+
+    // Fills the fixed page/area/project context so toolbox call sites only
+    // pass the event-specific fields (element + ids).
+    const trackDesignToolbox = (
+      fields: Omit<DesignToolboxClickProps, 'page_name' | 'area' | 'project_id'>,
+    ) => {
+      trackDesignToolboxClick(analytics.track, {
+        page_name: 'chat_panel',
+        area: 'chat_composer',
+        ...(projectId ? { project_id: projectId } : {}),
+        ...fields,
+      });
+    };
+
+    // Every toolbox resource carries a common `kind` + `id`, and the tracking
+    // enum mirrors `DesignToolboxResourceKind` exactly, so this is a direct
+    // projection.
+    function designToolboxResourceTracking(resource: DesignToolboxResource): {
+      resource_kind: NonNullable<DesignToolboxClickProps['resource_kind']>;
+      resource_id: string;
+    } {
+      return { resource_kind: resource.kind, resource_id: resource.id };
     }
 
     function applyDesignToolboxAction(action: DesignToolboxAction) {
@@ -1054,6 +1173,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
       if (resource.kind === 'plugin') {
         void (async () => {
+          inlineBackedPluginRef.current = {
+            id: resource.plugin.id,
+            label: resource.plugin.title,
+          };
           await pluginsSectionRef.current?.applyById(resource.plugin.id, resource.plugin);
           applyDesignToolboxDraft(`${inlineMentionToken(resource.plugin.title)}\n${prompt}`);
         })();
@@ -1083,18 +1206,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
       if (resource.kind === 'file') {
         const path = resource.file.path ?? resource.file.name;
-        setStaged((current) =>
-          current.some((item) => item.path === path)
-            ? current
-            : [
-                ...current,
-                {
-                  path,
-                  name: path.split('/').pop() || path,
-                  kind: looksLikeImage(path) ? 'image' : 'file',
-                },
-              ],
-        );
+        appendContextAttachment(path);
         applyDesignToolboxDraft(`${inlineMentionToken(path)}\n${prompt}`);
         return;
       }
@@ -1102,18 +1214,8 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       applyDesignToolboxDraft(prompt);
     }
 
-    function applyLuckyDesignToolboxAction() {
-      applyDesignToolboxAction(
-        pickLuckyDesignToolboxAction({
-          actions: DESIGN_TOOLBOX_ACTIONS,
-          draft,
-          projectFiles,
-          workspaceItem: visibleWorkspaceContext,
-        }),
-      );
-    }
-
     function removeStagedSkill(id: string) {
+      trackComposerBar({ element: 'context_remove', resource_kind: 'skill', resource_id: id });
       const skill = stagedSkills.find((s) => s.id === id) ?? null;
       setStagedSkills((prev) => prev.filter((s) => s.id !== id));
       const labels = [id, skill?.name ?? ''];
@@ -1121,6 +1223,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     }
 
     function removeStagedMcpServer(id: string) {
+      trackComposerBar({ element: 'context_remove', resource_kind: 'mcp', resource_id: id });
       const server = stagedMcpServers.find((item) => item.id === id) ?? null;
       setStagedMcpServers((prev) => prev.filter((item) => item.id !== id));
       replaceEditorDraft(stripInlineMentionLabels(draft, [
@@ -1130,6 +1233,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     }
 
     function removeStagedConnector(id: string) {
+      trackComposerBar({ element: 'context_remove', resource_kind: 'connector', resource_id: id });
       const connector = stagedConnectors.find((item) => item.id === id) ?? null;
       setStagedConnectors((prev) => prev.filter((item) => item.id !== id));
       replaceEditorDraft(stripInlineMentionLabels(draft, [
@@ -1139,6 +1243,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     }
 
     function removeWorkspaceContext(id: string) {
+      trackComposerBar({ element: 'context_remove', resource_kind: 'workspace', resource_id: id });
       if (visibleWorkspaceContext?.id === id) setDismissedWorkspaceContextId(id);
       const workspaceItem = selectedWorkspaceContexts.find((item) => item.id === id) ?? null;
       setStagedWorkspaceContexts((prev) => prev.filter((item) => item.id !== id));
@@ -1169,13 +1274,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       // file_upload_result per surface so this path reports
       // `page_name='chat_panel'` / `area='chat_composer'`.
       const cohort = deriveUploadCohort(files);
-      const orderStart = nextAttachmentOrderRef.current;
-      nextAttachmentOrderRef.current += files.length;
+      const orderStart = reserveAttachmentOrders(files.length);
       try {
         const result = await uploadProjectFiles(id, files);
         if (result.uploaded.length > 0) {
           const orderedUploaded = assignChatAttachmentOrders(result.uploaded, orderStart);
-          setStaged((s) => sortChatAttachmentsByOrder([...s, ...orderedUploaded]));
+          appendOrderedStagedAttachments(orderedUploaded);
         }
         const partial = result.failed.length > 0;
         if (partial) {
@@ -1258,8 +1362,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               (f): f is File => Boolean(f),
             );
             if (annotationFiles.length > 0) {
-              const orderStart = nextAttachmentOrderRef.current;
-              nextAttachmentOrderRef.current += annotationFiles.length;
+              const orderStart = reserveAttachmentOrders(annotationFiles.length);
               const id = await ensureProject();
               if (!id) {
                 ack({ ok: false, message: t('chat.annotationProjectCreateFailed') });
@@ -1308,7 +1411,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
             const appendAnnotationToComposer = () => {
               if (uploaded.length > 0) {
-                setStaged((s) => sortChatAttachmentsByOrder([...s, ...uploaded]));
+                appendOrderedStagedAttachments(uploaded);
               }
               if (visualAttachmentInput) {
                 setStagedVisualComments((current) => [
@@ -1467,6 +1570,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         onShowToast?.(t('chat.importDesignSystemFailed'));
         return false;
       }
+      trackComposerBar({
+        element: 'design_system_switch',
+        ...(designSystemId ? { design_system_id: designSystemId } : {}),
+      });
       onActiveDesignSystemChange?.(result);
       const switchedTitle = designSystemId === null
         ? t('chat.importDesignSystemNone')
@@ -1496,6 +1603,15 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       draftRef.current = text;
       setDraft(text);
       const set = new Set(present.map((e) => `${e.kind}:${e.id}`));
+      if (
+        activeAppliedPlugin
+        && inlineBackedPluginRef.current?.id === activeAppliedPlugin.pluginId
+        && !set.has(`plugin:${activeAppliedPlugin.pluginId}`)
+        && !mentionTokenPresent(text, inlineBackedPluginRef.current.label)
+      ) {
+        inlineBackedPluginRef.current = null;
+        pluginsSectionRef.current?.clear();
+      }
       setStagedSkills((prev) => prev.filter((s) => set.has(`skill:${s.id}`)));
       setStagedMcpServers((prev) => prev.filter((m) => set.has(`mcp:${m.id}`)));
       setStagedConnectors((prev) =>
@@ -1661,14 +1777,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         entity: { id: filePath, kind: 'file', label: filePath },
       });
       if (!staged.some((s) => s.path === filePath)) {
-        setStaged((s) => [
-          ...s,
-          {
-            path: filePath,
-            name: filePath.split("/").pop() || filePath,
-            kind: looksLikeImage(filePath) ? "image" : "file",
-          },
-        ]);
+        appendContextAttachment(filePath);
       }
       setMention(null);
     }
@@ -1679,6 +1788,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
         entity: { id: record.id, kind: 'plugin', label: record.title },
       });
       setMention(null);
+      inlineBackedPluginRef.current = { id: record.id, label: record.title };
       await pluginsSectionRef.current?.applyById(record.id, record);
     }
 
@@ -1726,6 +1836,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
     }
 
     function removeStaged(p: string) {
+      trackComposerBar({ element: 'context_remove', resource_kind: 'attachment', resource_id: p });
       setStaged((s) => s.filter((a) => a.path !== p));
       setStagedVisualComments((current) => current.filter((attachment) => attachment.screenshotPath !== p));
       // Strip the `@<path>` token from the draft and push the result back into
@@ -1892,8 +2003,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
     return (
       <div
-        className={`composer${dragActive ? " drag-active" : ""}`}
+        className={[
+          'composer',
+          dragActive ? 'drag-active' : '',
+          activeFileContext ? 'composer-active-file-mode' : '',
+        ].filter(Boolean).join(' ')}
         data-testid="chat-composer"
+        ref={composerRootRef}
         onDragOver={(e) => {
           e.preventDefault();
           setDragActive(true);
@@ -1916,6 +2032,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               ref={pluginsSectionRef}
               projectId={projectId}
               showRail={false}
+              renderActiveChip={false}
               onApplied={(brief, applied) => {
                 setActiveAppliedPlugin(applied.appliedPlugin);
                 // Use functional setState so stale closures from the @-mention
@@ -1925,7 +2042,10 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                   setDraft((cur) => (cur.trim().length === 0 ? brief : cur));
                 }
               }}
-              onCleared={() => setActiveAppliedPlugin(null)}
+              onCleared={() => {
+                inlineBackedPluginRef.current = null;
+                setActiveAppliedPlugin(null);
+              }}
               onChipDetails={(item: ContextItem) => {
                 if (item.kind !== 'plugin') return;
                 const record = installedPlugins.find((p) => p.id === item.id);
@@ -1933,7 +2053,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               }}
             />
           ) : null}
-          {designSystemPicker || selectedWorkspaceContexts.length > 0 || stagedSkills.length > 0 || stagedMcpServers.length > 0 || stagedConnectors.length > 0 ? (
+          {designSystemPicker || selectedWorkspaceContexts.length > 0 || stagedSkills.length > 0 || stagedMcpServers.length > 0 || stagedConnectors.length > 0 || staged.length > 0 || activeAppliedPlugin ? (
             <StagedRunContexts
               designSystemPicker={designSystemPicker}
               workspaceItems={selectedWorkspaceContexts}
@@ -1941,18 +2061,29 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               skills={stagedSkills}
               mcpServers={stagedMcpServers}
               connectors={stagedConnectors}
+              attachments={staged}
+              pluginChip={
+                activeAppliedPlugin
+                  ? {
+                      id: activeAppliedPlugin.pluginId,
+                      title: activeAppliedPlugin.pluginTitle ?? activeAppliedPlugin.pluginId,
+                    }
+                  : null
+              }
+              projectId={projectId}
               onRemoveWorkspace={removeWorkspaceContext}
               onRemoveSkill={removeStagedSkill}
               onRemoveMcp={removeStagedMcpServer}
               onRemoveConnector={removeStagedConnector}
-              t={t}
-            />
-          ) : null}
-          {staged.length > 0 ? (
-            <StagedAttachments
-              attachments={staged}
-              projectId={projectId}
-              onRemove={removeStaged}
+              onRemoveAttachment={removeStaged}
+              onRemovePlugin={() => {
+                pluginsSectionRef.current?.clear();
+                setActiveAppliedPlugin(null);
+              }}
+              onPluginDetails={(id) => {
+                const record = installedPlugins.find((plugin) => plugin.id === id);
+                if (record) setDetailsRecord(record);
+              }}
               t={t}
             />
           ) : null}
@@ -1976,6 +2107,16 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               ))}
             </div>
           ) : null}
+          {activeFileContext ? (
+            <div
+              className="composer-active-file"
+              data-testid="composer-active-file"
+              title={activeFileContext}
+            >
+              <span className="composer-active-file__label">{t('chat.activeFileEditingLabel')}</span>
+              <span className="composer-active-file__name">{activeFileContext}</span>
+            </div>
+          ) : null}
           {currentCommentAttachments().length > 0 ? (
             <StagedCommentAttachments
               attachments={currentCommentAttachments()}
@@ -1983,46 +2124,13 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               t={t}
             />
           ) : null}
-          {byokApiProtocol === 'senseaudio' && onChangeByokImageModel ? (
-            <div
-              className="composer-byok-image-model"
-              data-testid="composer-byok-image-model"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '4px 8px',
-                fontSize: 12,
-                color: 'var(--text-muted, #888)',
-              }}
-            >
-              <Icon name="image" size={13} />
-              <label
-                htmlFor="composer-byok-image-model-select"
-                style={{ flexShrink: 0 }}
-              >
-                {t('settings.byokImageModel')}
-              </label>
-              <SearchableModelSelect
-                id="composer-byok-image-model-select"
-                className="inline-switcher__select composer-byok-image-model__select"
-                value={byokImageModel ?? ''}
-                onChange={(value) => onChangeByokImageModel(value)}
-                models={IMAGE_MODELS.filter((m) => m.provider === 'senseaudio').map((m) => ({ id: m.id, label: m.label }))}
-                additionalOptions={[
-                  {
-                    value: '',
-                    label: (IMAGE_MODELS.find((m) => m.provider === 'senseaudio')?.label
-                      ?? 'senseaudio-image-2.0') + ' (default)',
-                  },
-                ]}
-                searchPlaceholder={t('newproj.modelSearch')}
-                searchInputTestId="composer-byok-image-model-search"
-                popoverTestId="composer-byok-image-model-popover"
-                style={{ fontSize: 12 }}
-              />
-            </div>
-          ) : null}
+          {/* The inline BYOK media-model pickers (image / video / speech +
+              voice) were removed pending a unified model-selection surface.
+              The selected models still flow into the run from the project's
+              creation-time pick (see ProjectView byok*ModelOverride → submit);
+              this only drops the per-composer override UI. The byok* props and
+              handlers are intentionally retained as the plumbing the unified
+              picker will reuse. */}
           <div
             className="composer-input-wrap"
             onFocus={() => setComposerEngaged(true)}
@@ -2030,8 +2138,12 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
             <LexicalComposerInput
               ref={editorRef}
               draft={draft}
-              placeholder={t('chat.composerPlaceholder')}
-              title={t('chat.composerPlaceholder')}
+              placeholder={
+                activeFileDisplayName
+                  ? t('chat.activeFilePlaceholder', { file: activeFileDisplayName })
+                  : t('chat.composerPlaceholder')
+              }
+              title={activeFileDisplayName ?? t('chat.composerPlaceholder')}
               knownEntities={composerMentionEntities}
               onChange={handleEditorChange}
               onTrigger={handleEditorTrigger}
@@ -2045,7 +2157,11 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
               }}
             />
           </div>
-          <CaretFloatingLayer caret={caretRect} open={Boolean(mention)}>
+          <CaretFloatingLayer
+            caret={caretRect}
+            open={Boolean(mention)}
+            boundaryRef={composerRootRef}
+          >
             <MentionPopover
               files={filteredFiles}
               workspaceContexts={filteredWorkspaceContexts}
@@ -2072,6 +2188,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
           <CaretFloatingLayer
             caret={caretRect}
             open={Boolean(slash && filteredSlash.length > 0)}
+            boundaryRef={composerRootRef}
           >
             <SlashPopover
               commands={filteredSlash}
@@ -2094,233 +2211,52 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 e.target.value = '';
               }}
             />
-            <div className="composer-tools-wrap">
-              <button
-                ref={toolsTriggerRef}
-                type="button"
-                className={`icon-btn composer-tools-trigger od-tooltip${toolsOpen ? ' active' : ''}`}
-                onClick={() => {
-                  setToolsOpen((v) => {
-                    const next = !v;
-                    if (next) {
-                      setDesignToolboxOpen(false);
-                      // P0 ui_click resources_popover_trigger — only emit on
-                      // the open transition so accidental double-clicks
-                      // don't pair an open + close into a "double tap" the
-                      // dashboard can't interpret.
-                      trackChatPanelClick(analytics.track, {
-                        page_name: 'chat_panel',
-                        area: 'chat_panel',
-                        element: 'resources_popover_trigger',
-                      });
-                    }
-                    return next;
-                  });
-                }}
-                title={t('chat.cliSettingsTitle')}
-                data-tooltip={t('chat.cliSettingsTitle')}
-                aria-haspopup="menu"
-                aria-expanded={toolsOpen}
-                aria-label={t('chat.cliSettingsAria')}
-              >
-                <span className="composer-tools-at" aria-hidden>
-                  @
-                </span>
-              </button>
-              {toolsOpen ? (
-                <div
-                  ref={toolsMenuRef}
-                  className="composer-tools-menu"
-                  role="menu"
-                >
-                  <div className="composer-tools-tabs" role="tablist">
-                    {availableTabs.map((tab) => (
-                      <button
-                        key={tab}
-                        type="button"
-                        role="tab"
-                        aria-selected={toolsTab === tab}
-                        className={`composer-tools-tab${toolsTab === tab ? ' active' : ''}`}
-                        onClick={() => setToolsTab(tab)}
-                      >
-                        {tab === 'plugins' ? (
-                          <>
-                            <Icon name="sparkles" size={12} />
-                            <span>Plugins</span>
-                          </>
-                        ) : null}
-                        {tab === 'skills' ? (
-                          <>
-                            <Icon name="file" size={12} />
-                            <span>Skills</span>
-                          </>
-                        ) : null}
-                        {tab === 'mcp' ? (
-                          <>
-                            <Icon name="link" size={12} />
-                            <span>MCP</span>
-                          </>
-                        ) : null}
-                        {tab === 'import' ? (
-                          <>
-                            <Icon name="import" size={12} />
-                            <span>{t('chat.importLabel')}</span>
-                          </>
-                        ) : null}
-                      </button>
-                    ))}
-                  </div>
-
-                  <div className="composer-tools-content">
-                    {toolsTab === 'plugins' ? (
-                      <ToolsPluginsPanel
-                        plugins={pluginsForComposer}
-                        activePluginId={activeAppliedPlugin?.pluginId ?? pinnedPluginId}
-                        onApply={async (record) => {
-                          const result = await pluginsSectionRef.current?.applyById(
-                            record.id,
-                            record,
-                          );
-                          if (result) setToolsOpen(false);
-                        }}
-                        onShowDetails={(record) => {
-                          setDetailsRecord(record);
-                          setToolsOpen(false);
-                        }}
-                      />
-                    ) : null}
-                    {toolsTab === 'skills' ? (
-                      <ToolsSkillsPanel
-                        skills={skills}
-                        currentSkillId={currentSkillId}
-                        onPick={async (skill) => {
-                          const applied = await applyProjectSkill(skill);
-                          if (!applied) return;
-                          // Mirror the @-picker skill insert: stage the skill
-                          // and drop an atomic `@<name>` pill at the caret.
-                          setStagedSkills((prev) =>
-                            prev.some((s) => s.id === skill.id)
-                              ? prev
-                              : [...prev, skill],
-                          );
-                          editorRef.current?.insertMention({
-                            token: inlineMentionToken(skill.name),
-                            entity: { id: skill.id, kind: 'skill', label: skill.name },
-                          });
-                          editorRef.current?.focus();
-                          setToolsOpen(false);
-                        }}
-                      />
-                    ) : null}
-                    {toolsTab === 'mcp' && onOpenMcpSettings ? (
-                      <ToolsMcpPanel
-                        servers={enabledMcpServers}
-                        templates={mcpTemplates}
-                        onInsert={(serverId) => {
-                          const server = enabledMcpServers.find((item) => item.id === serverId);
-                          const label = server?.label || serverId;
-                          // Stage the server and insert an atomic `@<label>`
-                          // pill carrying its id, matching the @-picker path.
-                          setStagedMcpServers((current) =>
-                            current.some((item) => item.id === serverId)
-                              ? current
-                              : server
-                                ? [...current, server]
-                                : current,
-                          );
-                          editorRef.current?.insertMention({
-                            token: inlineMentionToken(label),
-                            entity: { id: serverId, kind: 'mcp', label },
-                          });
-                          editorRef.current?.focus();
-                          setToolsOpen(false);
-                        }}
-                        onManage={() => {
-                          setToolsOpen(false);
-                          onOpenMcpSettings?.();
-                        }}
-                      />
-                    ) : null}
-                    {toolsTab === 'import' ? (
-                      <ToolsImportPanel
-                        t={t}
-                        onLinkFolder={async () => {
-                          setToolsOpen(false);
-                          await handleLinkFolder();
-                        }}
-                        currentDesignSystemId={currentDesignSystemId}
-                        onSwitchDesignSystem={
-                          projectId
-                            ? async (designSystemId, title) => {
-                                const ok = await handleSwitchDesignSystem(
-                                  designSystemId,
-                                  title,
-                                );
-                                if (ok) setToolsOpen(false);
-                                return ok;
-                              }
-                            : undefined
-                        }
-                      />
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-            <div className="composer-design-toolbox-wrap">
-              <button
-                ref={designToolboxTriggerRef}
-                type="button"
-                className={`icon-btn composer-toolbox-trigger od-tooltip${designToolboxOpen ? ' active' : ''}`}
-                onClick={() => {
-                  setDesignToolboxOpen((v) => {
-                    const next = !v;
-                    if (next) {
-                      setComposerEngaged(true);
-                      setToolsOpen(false);
-                    }
-                    return next;
-                  });
-                }}
-                title={t('chat.designToolbox.tooltip')}
-                data-tooltip={t('chat.designToolbox.tooltip')}
-                aria-haspopup="menu"
-                aria-expanded={designToolboxOpen}
-                aria-label={t('chat.designToolbox.aria')}
-              >
-                <Icon name="lightbulb" size={15} />
-              </button>
-              {designToolboxOpen ? (
-                <div
-                  ref={designToolboxMenuRef}
-                  className="composer-design-toolbox-menu"
-                  role="menu"
-                >
-                  <DesignToolboxPanel
-                    actions={DESIGN_TOOLBOX_ACTIONS}
-                    skills={skills}
-                    plugins={pluginsForComposer}
-                    mcpServers={enabledMcpServers}
-                    mcpTemplates={mcpTemplates}
-                    connectors={connectors}
-                    projectFiles={projectFiles}
-                    activeSkillIds={stagedSkills.map((skill) => skill.id)}
-                    activePluginId={activeAppliedPlugin?.pluginId ?? pinnedPluginId ?? null}
-                    activeMcpServerIds={stagedMcpServers.map((server) => server.id)}
-                    activeConnectorIds={stagedConnectors.map((connector) => connector.id)}
-                    activeFilePaths={staged.map((item) => item.path)}
-                    onLucky={applyLuckyDesignToolboxAction}
-                    onPickAction={applyDesignToolboxAction}
-                    onPickSkill={applyDesignToolboxSkill}
-                    onPickResource={applyDesignToolboxResource}
-                  />
-                </div>
-              ) : null}
-            </div>
-            <Button
-              size="icon"
-              data-testid="chat-attach"
-              onClick={() => {
+            <ComposerPlusMenu
+              triggerTestId="chat-plus-trigger"
+              onOpen={() => {
+                trackComposerBar({ element: 'plus_menu_open' });
+                setComposerEngaged(true);
+              }}
+              connectors={connectors}
+              onPickConnector={(connector) => {
+                trackComposerBar({
+                  element: 'plus_pick',
+                  resource_kind: 'connector',
+                  resource_id: connector.id,
+                });
+                insertConnectorMention(connector);
+              }}
+              onAddConnector={() => {
+                trackComposerBar({ element: 'plus_add', resource_kind: 'connector' });
+                onOpenConnectors?.();
+              }}
+              plugins={pluginsForComposer}
+              onPickPlugin={(record) => {
+                trackComposerBar({
+                  element: 'plus_pick',
+                  resource_kind: 'plugin',
+                  resource_id: record.id,
+                });
+                void insertPluginMention(record);
+              }}
+              onAddPlugin={() => {
+                trackComposerBar({ element: 'plus_add', resource_kind: 'plugin' });
+                onBrowsePlugins?.();
+              }}
+              mcpServers={enabledMcpServers}
+              onPickMcp={(server) => {
+                trackComposerBar({
+                  element: 'plus_pick',
+                  resource_kind: 'mcp',
+                  resource_id: server.id,
+                });
+                insertMcpMention(server);
+              }}
+              onAddMcp={() => {
+                trackComposerBar({ element: 'plus_add', resource_kind: 'mcp' });
+                onOpenMcpSettings?.();
+              }}
+              onAttachFiles={() => {
                 trackChatPanelClick(analytics.track, {
                   page_name: 'chat_panel',
                   area: 'chat_panel',
@@ -2328,23 +2264,70 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 });
                 fileInputRef.current?.click();
               }}
-              title={t('chat.attachTitle')}
-              data-tooltip={t('chat.attachTitle')}
-              disabled={uploading}
-              aria-label={t('chat.attachAria')}
-            >
-              {uploading ? (
-                <Icon name="spinner" size={15} />
-              ) : (
-                <Icon name="attach" size={15} />
+              attachLoading={uploading}
+              toolboxLabel={t('chat.designToolbox.title')}
+              renderToolbox={(close) => (
+                <DesignToolboxPanel
+                  actions={DESIGN_TOOLBOX_ACTIONS}
+                  skills={skills}
+                  plugins={pluginsForComposer}
+                  mcpServers={enabledMcpServers}
+                  mcpTemplates={mcpTemplates}
+                  connectors={connectors}
+                  projectFiles={projectFiles}
+                  activeSkillIds={stagedSkills.map((skill) => skill.id)}
+                  activePluginId={activeAppliedPlugin?.pluginId ?? pinnedPluginId ?? null}
+                  activeMcpServerIds={stagedMcpServers.map((server) => server.id)}
+                  activeConnectorIds={stagedConnectors.map((connector) => connector.id)}
+                  activeFilePaths={staged.map((item) => item.path)}
+                  onOpened={() => trackDesignToolbox({ element: 'design_toolbox_open' })}
+                  onPickAction={(action) => {
+                    trackDesignToolbox({
+                      element: 'design_toolbox_action',
+                      toolbox_action_id: action.id,
+                    });
+                    applyDesignToolboxAction(action);
+                    close();
+                  }}
+                  onPickSkill={(skill) => {
+                    trackDesignToolbox({
+                      element: 'design_toolbox_resource',
+                      resource_kind: 'skill',
+                      resource_id: skill.id,
+                    });
+                    applyDesignToolboxSkill(skill);
+                    close();
+                  }}
+                  onPickResource={(resource) => {
+                    trackDesignToolbox({
+                      element: 'design_toolbox_resource',
+                      ...designToolboxResourceTracking(resource),
+                    });
+                    applyDesignToolboxResource(resource);
+                    close();
+                  }}
+                />
               )}
-            </Button>
+            />
+            {leadingAccessory}
+            <span className="composer-spacer" />
+            {footerAccessory}
             <SessionModeToggle
               mode={sessionMode}
-              onChange={onSessionModeChange}
+              onChange={(next) => {
+                if (next !== sessionMode) {
+                  trackComposerSessionModeClick(analytics.track, {
+                    page_name: 'chat_panel',
+                    area: 'chat_composer',
+                    element: 'session_mode_toggle',
+                    mode_before: sessionModeToTracking(sessionMode),
+                    mode_after: sessionModeToTracking(next),
+                    ...(projectId ? { project_id: projectId } : {}),
+                  });
+                }
+                onSessionModeChange?.(next);
+              }}
             />
-            {footerAccessory}
-            <span className="composer-spacer" />
             {showStopButton ? (
               <button
                 type="button"
@@ -2388,6 +2371,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
             record={detailsRecord}
             onClose={() => setDetailsRecord(null)}
             onUse={async (record) => {
+              inlineBackedPluginRef.current = null;
               await pluginsSectionRef.current?.applyById(record.id, record);
               setDetailsRecord(null);
             }}
@@ -2580,110 +2564,6 @@ function sortChatCommentAttachmentsByOrder(attachments: ChatCommentAttachment[])
     .map((entry) => entry.attachment);
 }
 
-function StagedAttachments({
-  attachments,
-  projectId,
-  onRemove,
-  t,
-}: {
-  attachments: ChatAttachment[];
-  projectId: string | null;
-  onRemove: (path: string) => void;
-  t: TranslateFn;
-}) {
-  const [preview, setPreview] = useState<ChatAttachment | null>(null);
-  const previewUrl = preview && projectId ? projectRawUrl(projectId, preview.path) : null;
-
-  useEffect(() => {
-    if (!preview) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setPreview(null);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [preview]);
-
-  return (
-    <>
-      <div className="staged-row" data-testid="staged-attachments">
-        {attachments.map((a, index) => {
-          const canPreview = a.kind === "image" && Boolean(projectId);
-          const imageUrl = canPreview ? projectRawUrl(projectId!, a.path) : null;
-          return (
-            <div key={a.path} className={`staged-chip staged-${a.kind}`}>
-              <span className="staged-order" aria-label={`Attachment ${index + 1}`}>
-                {index + 1}
-              </span>
-              {canPreview && imageUrl ? (
-                <button
-                  type="button"
-                  className="staged-preview-trigger"
-                  onClick={() => setPreview(a)}
-                  title={a.path}
-                  aria-label={`Preview ${a.name}`}
-                >
-                  <img src={imageUrl} alt="" aria-hidden />
-                  <span className="staged-name">
-                    {a.name}
-                  </span>
-                </button>
-              ) : (
-                <>
-                  <span className="staged-icon" aria-hidden>
-                    <Icon name="file" size={13} />
-                  </span>
-                  <span className="staged-name" title={a.path}>
-                    {a.name}
-                  </span>
-                </>
-              )}
-              <button
-                type="button"
-                className="staged-remove od-tooltip"
-                onClick={() => onRemove(a.path)}
-                title={t('common.delete')}
-                data-tooltip={t('common.delete')}
-                aria-label={t('chat.removeAria', { name: a.name })}
-              >
-                <Icon name="close" size={11} />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-      {preview && previewUrl ? createPortal(
-        <div
-          className="staged-preview-modal"
-          role="dialog"
-          aria-modal="true"
-          aria-label={preview.name}
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setPreview(null);
-          }}
-        >
-          <div className="staged-preview-card">
-            <div className="staged-preview-head">
-              <span title={preview.path}>{preview.name}</span>
-              <button
-                type="button"
-                className="icon-only od-tooltip"
-                onClick={() => setPreview(null)}
-                aria-label={t('common.close')}
-                title={t('common.close')}
-                data-tooltip={t('common.close')}
-              >
-                <Icon name="close" size={14} />
-              </button>
-            </div>
-            <img src={previewUrl} alt={preview.name} />
-          </div>
-        </div>,
-        document.body
-      ) : null}
-    </>
-  );
-}
-
 function workspaceContextIcon(item: WorkspaceContextItem): IconName {
   if (item.kind === 'browser') return 'globe';
   if (item.kind === 'folder' || item.kind === 'design-files') return 'folder';
@@ -2704,7 +2584,24 @@ function workspaceContextTitle(item: WorkspaceContextItem): string {
 }
 
 function workspaceContextDescription(item: WorkspaceContextItem): string {
+  if (item.kind === 'design-files') return item.path || 'Project files';
+  if (item.kind === 'terminal') return item.title || 'Terminal session';
   return item.url || item.path || item.absolutePath || item.title || item.tabId || item.id;
+}
+
+function lastPathSegment(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalized.split('/').filter(Boolean).pop() || path;
+}
+
+function projectFileMentionTitle(file: ProjectFile, fallback: string): string {
+  return file.name || lastPathSegment(fallback);
+}
+
+function projectFileMentionDescription(file: ProjectFile, fallback: string): string {
+  const label = projectFileMentionTitle(file, fallback);
+  if (fallback && fallback !== label) return fallback;
+  return [file.kind, file.mime].filter(Boolean).join(' · ');
 }
 
 function workspaceContextSearchText(item: WorkspaceContextItem): string {
@@ -2749,10 +2646,16 @@ function StagedRunContexts({
   skills,
   mcpServers,
   connectors,
+  attachments,
+  pluginChip,
+  projectId,
   onRemoveWorkspace,
   onRemoveSkill,
   onRemoveMcp,
   onRemoveConnector,
+  onRemoveAttachment,
+  onRemovePlugin,
+  onPluginDetails,
   t,
 }: {
   designSystemPicker?: ReactNode;
@@ -2761,13 +2664,34 @@ function StagedRunContexts({
   skills: SkillSummary[];
   mcpServers: McpServerConfig[];
   connectors: ConnectorDetail[];
+  attachments: ChatAttachment[];
+  pluginChip?: { id: string; title: string } | null;
+  projectId: string | null;
   onRemoveWorkspace: (id: string) => void;
   onRemoveSkill: (id: string) => void;
   onRemoveMcp: (id: string) => void;
   onRemoveConnector: (id: string) => void;
+  onRemoveAttachment: (path: string) => void;
+  onRemovePlugin?: () => void;
+  onPluginDetails?: (id: string) => void;
   t: TranslateFn;
 }) {
+  // Attachment thumbnails preview in a portal modal; keep that state here so the
+  // file chips can live in the same wrap row as the design-system picker and
+  // other run-context chips (so files flow to the picker's right, wrapping to a
+  // new line only when the row fills) instead of forcing a separate row below.
+  const [preview, setPreview] = useState<ChatAttachment | null>(null);
+  const previewUrl = preview && projectId ? projectRawUrl(projectId, preview.path) : null;
+  useEffect(() => {
+    if (!preview) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setPreview(null);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
   return (
+    <>
     <div
       className="staged-row staged-context-row"
       data-testid="staged-contexts"
@@ -2775,6 +2699,36 @@ function StagedRunContexts({
       {designSystemPicker ? (
         <div className="staged-context-picker staged-context-picker--design-system">
           {designSystemPicker}
+        </div>
+      ) : null}
+      {pluginChip ? (
+        <div className="staged-chip staged-context staged-context--plugin">
+          {/* Two sibling controls — a details button (icon + name) and the
+              remove button — rather than a role=button wrapper containing the
+              remove button. Nested interactive controls break focus order and
+              assistive-tech announcements. */}
+          <button
+            type="button"
+            className="staged-context-open"
+            onClick={() => onPluginDetails?.(pluginChip.id)}
+            title={pluginChip.title}
+            aria-label={pluginChip.title}
+          >
+            <span className="staged-icon" aria-hidden>
+              <Icon name="sparkles" size={12} />
+            </span>
+            <span className="staged-name">{pluginChip.title}</span>
+          </button>
+          <button
+            type="button"
+            className="staged-remove od-tooltip"
+            onClick={() => onRemovePlugin?.()}
+            title={t('common.delete')}
+            data-tooltip={t('common.delete')}
+            aria-label={t('chat.removeAria', { name: pluginChip.title })}
+          >
+            <Icon name="close" size={11} />
+          </button>
         </div>
       ) : null}
       {workspaceItems.map((workspaceItem) => {
@@ -2879,7 +2833,79 @@ function StagedRunContexts({
           </button>
         </div>
       ))}
+      {attachments.map((a, index) => {
+        const canPreview = a.kind === 'image' && Boolean(projectId);
+        const imageUrl = canPreview ? projectRawUrl(projectId!, a.path) : null;
+        return (
+          <div key={a.path} className={`staged-chip staged-${a.kind}`}>
+            <span className="staged-order" aria-label={`Attachment ${index + 1}`}>
+              {index + 1}
+            </span>
+            {canPreview && imageUrl ? (
+              <button
+                type="button"
+                className="staged-preview-trigger"
+                onClick={() => setPreview(a)}
+                title={a.path}
+                aria-label={`Preview ${a.name}`}
+              >
+                <img src={imageUrl} alt="" aria-hidden />
+                <span className="staged-name">{a.name}</span>
+              </button>
+            ) : (
+              <>
+                <span className="staged-icon" aria-hidden>
+                  <Icon name="file" size={13} />
+                </span>
+                <span className="staged-name" title={a.path}>
+                  {a.name}
+                </span>
+              </>
+            )}
+            <button
+              type="button"
+              className="staged-remove od-tooltip"
+              onClick={() => onRemoveAttachment(a.path)}
+              title={t('common.delete')}
+              data-tooltip={t('common.delete')}
+              aria-label={t('chat.removeAria', { name: a.name })}
+            >
+              <Icon name="close" size={11} />
+            </button>
+          </div>
+        );
+      })}
     </div>
+    {preview && previewUrl ? createPortal(
+      <div
+        className="staged-preview-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={preview.name}
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setPreview(null);
+        }}
+      >
+        <div className="staged-preview-card">
+          <div className="staged-preview-head">
+            <span title={preview.path}>{preview.name}</span>
+            <button
+              type="button"
+              className="icon-only od-tooltip"
+              onClick={() => setPreview(null)}
+              aria-label={t('common.close')}
+              title={t('common.close')}
+              data-tooltip={t('common.close')}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+          <img src={previewUrl} alt={preview.name} />
+        </div>
+      </div>,
+      document.body
+    ) : null}
+    </>
   );
 }
 
@@ -2932,6 +2958,7 @@ function ToolsPluginsPanel({
   onApply: (record: InstalledPluginRecord) => void | Promise<void>;
   onShowDetails: (record: InstalledPluginRecord) => void;
 }) {
+  const { locale } = useI18n();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [source, setSource] = useState<'community' | 'mine'>('community');
   const [query, setQuery] = useState('');
@@ -2997,7 +3024,10 @@ function ToolsPluginsPanel({
         </div>
       ) : (
         <div className="composer-tools-list">
-          {visiblePlugins.map((p) => (
+          {visiblePlugins.map((p) => {
+            const pluginTitle = localizePluginTitle(locale, p);
+            const pluginDescription = localizePluginDescription(locale, p);
+            return (
             <div
               key={p.id}
               className={`composer-tools-row composer-tools-row--plugin${
@@ -3018,14 +3048,14 @@ function ToolsPluginsPanel({
                 }}
                 disabled={pendingId !== null}
                 aria-busy={pendingId === p.id ? 'true' : undefined}
-                title={p.manifest?.description ?? p.title}
+                title={pluginDescription || pluginTitle}
               >
                 <Icon name="sparkles" size={12} />
                 <span className="composer-tools-row-body">
-                  <strong>{p.title}</strong>
-                  {p.manifest?.description ? (
+                  <strong>{pluginTitle}</strong>
+                  {pluginDescription ? (
                     <span className="composer-tools-row-meta">
-                      {p.manifest.description}
+                      {pluginDescription}
                     </span>
                   ) : (
                     <span className="composer-tools-row-meta">{p.id}</span>
@@ -3040,13 +3070,14 @@ function ToolsPluginsPanel({
                 className="composer-tools-row-side"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onShowDetails(p)}
-                title={`View details for ${p.title}`}
-                aria-label={`View details for ${p.title}`}
+                title={`View details for ${pluginTitle}`}
+                aria-label={`View details for ${pluginTitle}`}
               >
                 <Icon name="eye" size={12} />
               </button>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </>
@@ -3165,10 +3196,10 @@ function DesignToolboxPanel({
   activeMcpServerIds,
   activeConnectorIds,
   activeFilePaths,
-  onLucky,
   onPickAction,
   onPickSkill,
   onPickResource,
+  onOpened,
 }: {
   actions: DesignToolboxAction[];
   skills: SkillSummary[];
@@ -3182,13 +3213,18 @@ function DesignToolboxPanel({
   activeMcpServerIds: string[];
   activeConnectorIds: string[];
   activeFilePaths: string[];
-  onLucky: () => void;
   onPickAction: (action: DesignToolboxAction) => void;
   onPickSkill: (skill: SkillSummary) => void;
   onPickResource: (resource: DesignToolboxResource) => void;
+  onOpened?: () => void;
 }) {
   const { locale, t } = useI18n();
   const [query, setQuery] = useState('');
+  // Fire once when the toolbox panel mounts (i.e. the user opened it).
+  useEffect(() => {
+    onOpened?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const activeSkillSet = useMemo(() => new Set(activeSkillIds), [activeSkillIds]);
   const activeMcpServerSet = useMemo(() => new Set(activeMcpServerIds), [activeMcpServerIds]);
   const activeConnectorSet = useMemo(() => new Set(activeConnectorIds), [activeConnectorIds]);
@@ -3224,6 +3260,42 @@ function DesignToolboxPanel({
     [actions, query, resources],
   );
 
+  // One shared hover-detail panel for the whole list — swapping a single
+  // portaled panel as the cursor sweeps rows, instead of one panel per row
+  // (which ghosted: the close delay left several stacked on screen at once).
+  const [toolboxDetail, setToolboxDetail] = useState<{
+    key: string;
+    left: number;
+    top: number;
+    node: ReactNode;
+  } | null>(null);
+  const detailCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function cancelDetailClose() {
+    if (detailCloseTimer.current) {
+      clearTimeout(detailCloseTimer.current);
+      detailCloseTimer.current = null;
+    }
+  }
+  function showToolboxDetail(key: string, rect: DOMRect, node: ReactNode) {
+    cancelDetailClose();
+    const detailWidth = 264;
+    const gap = 8;
+    const toRight = rect.right + gap;
+    const left =
+      toRight + detailWidth > window.innerWidth - 8
+        ? rect.left - gap - detailWidth
+        : toRight;
+    setToolboxDetail({ key, left, top: rect.top, node });
+  }
+  function scheduleToolboxDetailClose(key: string) {
+    cancelDetailClose();
+    detailCloseTimer.current = setTimeout(() => {
+      setToolboxDetail((cur) => (cur?.key === key ? null : cur));
+      detailCloseTimer.current = null;
+    }, 160);
+  }
+  useEffect(() => () => cancelDetailClose(), []);
+
   return (
     <>
       <div className="composer-design-toolbox-head">
@@ -3231,64 +3303,59 @@ function DesignToolboxPanel({
           <Icon name="lightbulb" size={14} />
           <span>{t('chat.designToolbox.title')}</span>
         </div>
-        <button
-          type="button"
-          className="composer-design-toolbox-lucky"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onLucky}
-        >
-          {t('chat.designToolbox.lucky')}
-        </button>
       </div>
-      <div className="composer-tools-filter">
+      <div className="plus-menu__search">
+        <Icon name="search" size={13} />
         <input
-          className="composer-tools-search"
           value={query}
           onChange={(e) => setQuery(e.currentTarget.value)}
           placeholder={t('chat.designToolbox.searchPlaceholder')}
           aria-label={t('chat.designToolbox.searchAria')}
         />
       </div>
-      {visibleActions.length > 0 ? (
-        <div className="composer-tools-list">
-          <div className="composer-tools-section-label">{t('chat.designToolbox.followupSection')}</div>
+      {visibleActions.length > 0 || visibleResources.length > 0 ? (
+        <div className="plus-menu__list">
+          {visibleActions.length > 0 ? (
+            <div className="plus-menu__section-label">
+              {t('chat.designToolbox.followupSection')}
+            </div>
+          ) : null}
           {visibleActions.map((action) => {
             const skill = findDesignToolboxSkill(action, skills);
             const actionTitle = designToolboxActionTitle(action, t);
             const actionDescription = designToolboxActionDescription(action, t);
+            const skillName = skill ? localizeSkillName(locale, skill) : null;
             return (
-              <button
+              <ToolboxItemRow
                 key={action.id}
-                type="button"
-                role="menuitem"
-                className="composer-tools-row composer-design-toolbox-row"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onPickAction(action)}
-                title={skill ? localizeSkillDescription(locale, skill) : actionDescription}
-              >
-                <span className="composer-design-toolbox-icon" aria-hidden>
-                  <Icon name={action.icon} size={13} />
-                </span>
-                <span className="composer-tools-row-body">
-                  <strong>{actionTitle}</strong>
-                  <span className="composer-tools-row-meta">
-                    {actionDescription}
-                  </span>
-                  {skill ? (
-                    <span className="composer-design-toolbox-skill">
-                      @{localizeSkillName(locale, skill)}
-                    </span>
-                  ) : null}
-                </span>
-                <span className="composer-design-toolbox-badge">{designToolboxActionBadge(action, t)}</span>
-              </button>
+                detailKey={action.id}
+                icon={action.icon}
+                name={actionTitle}
+                onHover={showToolboxDetail}
+                onLeave={scheduleToolboxDetailClose}
+                onPick={() => onPickAction(action)}
+                detail={
+                  <>
+                    <div className="plus-menu__detail-title">{actionTitle}</div>
+                    {actionDescription ? (
+                      <div className="plus-menu__detail-desc">{actionDescription}</div>
+                    ) : null}
+                    {skillName ? (
+                      <div className="plus-menu__detail-skill">@{skillName}</div>
+                    ) : null}
+                    <div className="plus-menu__detail-badge">
+                      {designToolboxActionBadge(action, t)}
+                    </div>
+                  </>
+                }
+              />
             );
           })}
-        </div>
-      ) : null}
-      {visibleResources.length > 0 ? (
-        <div className="composer-tools-list">
-          <div className="composer-tools-section-label">{t('chat.designToolbox.resourcesSection')}</div>
+          {visibleResources.length > 0 ? (
+            <div className="plus-menu__section-label">
+              {t('chat.designToolbox.resourcesSection')}
+            </div>
+          ) : null}
           {visibleResources.map((resource) => {
             const active = designToolboxResourceIsActive(resource, {
               skillIds: activeSkillSet,
@@ -3298,47 +3365,113 @@ function DesignToolboxPanel({
               filePaths: activeFileSet,
             });
             return (
-              <button
+              <ToolboxItemRow
                 key={resource.key}
-                type="button"
-                role="menuitem"
-                className={`composer-tools-row composer-design-toolbox-row${active ? ' active' : ''}`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
+                detailKey={resource.key}
+                icon={resource.icon}
+                name={resource.title}
+                active={active}
+                onHover={showToolboxDetail}
+                onLeave={scheduleToolboxDetailClose}
+                onPick={() => {
                   if (resource.kind === 'skill') {
                     onPickSkill(resource.skill);
                   } else {
                     onPickResource(resource);
                   }
                 }}
-                title={resource.subtitle || resource.title}
-              >
-                <span className="composer-design-toolbox-icon" aria-hidden>
-                  <Icon name={resource.icon} size={13} />
-                </span>
-                <span className="composer-tools-row-body">
-                  <strong>{resource.title}</strong>
-                  <span className="composer-tools-row-meta">
-                    {resource.subtitle}
-                  </span>
-                  <span className="composer-design-toolbox-skill">
-                    {designToolboxResourceKindLabel(resource.kind, t)}
-                  </span>
-                </span>
-                <span className="composer-design-toolbox-badge">
-                  {active ? t('chat.designToolbox.selected') : resource.badge}
-                </span>
-              </button>
+                detail={
+                  <>
+                    <div className="plus-menu__detail-title">{resource.title}</div>
+                    {resource.subtitle ? (
+                      <div className="plus-menu__detail-desc">{resource.subtitle}</div>
+                    ) : null}
+                    <div className="plus-menu__detail-skill">
+                      {designToolboxResourceKindLabel(resource.kind, t)}
+                    </div>
+                    <div className="plus-menu__detail-badge">
+                      {active ? t('chat.designToolbox.selected') : resource.badge}
+                    </div>
+                  </>
+                }
+              />
             );
           })}
         </div>
-      ) : null}
-      {visibleActions.length === 0 && visibleResources.length === 0 ? (
-        <div className="composer-tools-empty">
+      ) : (
+        <div className="plus-menu__empty">
           {t('chat.designToolbox.noResources', { query })}
         </div>
-      ) : null}
+      )}
+      {toolboxDetail
+        ? createPortal(
+            <div
+              className="plus-menu__detail"
+              style={{ left: toolboxDetail.left, top: toolboxDetail.top }}
+              onMouseEnter={cancelDetailClose}
+              onMouseLeave={() => scheduleToolboxDetailClose(toolboxDetail.key)}
+            >
+              {toolboxDetail.node}
+            </div>,
+            document.body,
+          )
+        : null}
     </>
+  );
+}
+
+// A single toolbox row, styled like the Connectors/Plugins submenu rows
+// (single line: icon + name). Clicking applies the entry; hovering shows a
+// third-level detail panel (title / description / @skill / badge). The detail
+// panel is PORTALED to <body> because the parent flyout uses `overflow-y: auto`
+// (height-capped scroll) which would otherwise clip a nested panel.
+// The hover detail panel is owned by the PARENT
+// (DesignToolboxPanel) as ONE shared panel — not per-row — so sweeping across
+// rows swaps the single panel in place instead of stacking several portaled
+// panels that briefly coexist (the close delay would otherwise leave 2-4 of
+// them on screen at once, reading as ghosting). The row just reports hover
+// enter/leave with its rect + detail node.
+function ToolboxItemRow({
+  icon,
+  name,
+  active,
+  detailKey,
+  detail,
+  onHover,
+  onLeave,
+  onPick,
+}: {
+  icon: IconName;
+  name: string;
+  active?: boolean;
+  detailKey: string;
+  detail: ReactNode;
+  onHover: (key: string, rect: DOMRect, detail: ReactNode) => void;
+  onLeave: (key: string) => void;
+  onPick: () => void;
+}) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  return (
+    <div
+      ref={rowRef}
+      className="plus-menu__subitem"
+      onMouseEnter={() => {
+        const r = rowRef.current?.getBoundingClientRect();
+        if (r) onHover(detailKey, r, detail);
+      }}
+      onMouseLeave={() => onLeave(detailKey)}
+    >
+      <button
+        type="button"
+        role="menuitem"
+        className={`plus-menu__item${active ? ' is-active' : ''}`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onPick}
+      >
+        <Icon name={icon} size={15} className="plus-menu__item-icon" />
+        <span>{name}</span>
+      </button>
+    </div>
   );
 }
 
@@ -3507,12 +3640,12 @@ function buildDesignToolboxResources({
   }
 
   for (const plugin of plugins) {
-    const subtitle = plugin.manifest?.description ?? plugin.id;
+    const subtitle = localizePluginDescription(locale, plugin) || plugin.id;
     resources.push({
       key: `plugin:${plugin.id}`,
       kind: 'plugin',
       id: plugin.id,
-      title: plugin.title,
+      title: localizePluginTitle(locale, plugin),
       subtitle,
       badge: plugin.manifest?.od?.kind ?? 'plugin',
       icon: 'sparkles',
@@ -3835,51 +3968,6 @@ function designToolboxSkillIcon(skill: SkillSummary): IconName {
   if (skill.category === 'animation-motion') return 'sliders';
   if (skill.category === 'creative-direction') return 'sparkles';
   return 'file';
-}
-
-function pickLuckyDesignToolboxAction({
-  actions,
-  draft,
-  projectFiles,
-  workspaceItem,
-}: {
-  actions: DesignToolboxAction[];
-  draft: string;
-  projectFiles: ProjectFile[];
-  workspaceItem: WorkspaceContextItem | null;
-}): DesignToolboxAction {
-  const haystack = [
-    draft,
-    workspaceItem?.label ?? '',
-    workspaceItem?.path ?? '',
-    workspaceItem?.title ?? '',
-    ...projectFiles.slice(0, 20).map((file) => file.path ?? file.name),
-  ]
-    .join(' ')
-    .toLowerCase();
-  const preferredId = keywordPick(
-    haystack,
-    [
-      ['video-gen', ['video', 'sora', 'mp4', 'remotion', 'hyperframes', '视频', '生视频']],
-      ['image-gen', ['image', 'png', 'jpg', 'illustration', 'moodboard', '生图', '图片']],
-      ['motion', ['animation', 'motion', 'gsap', 'scroll', 'animate', '动效', '动画']],
-      ['anti-ai-polish', ['anti', 'slop', 'generic', 'ai味', 'ai 味', '反 ai', '美化']],
-      ['visual-polish', ['polish', 'critique', 'audit', 'responsive', '润色', '检查']],
-    ],
-    haystack.includes('.html') || haystack.includes('browser') ? 'visual-polish' : 'auto-match',
-  );
-  return actions.find((action) => action.id === preferredId) ?? actions[0]!;
-}
-
-function keywordPick(
-  haystack: string,
-  choices: Array<[DesignToolboxActionId, string[]]>,
-  fallback: DesignToolboxActionId,
-): DesignToolboxActionId {
-  for (const [id, keywords] of choices) {
-    if (keywords.some((keyword) => haystack.includes(keyword))) return id;
-  }
-  return fallback;
 }
 
 function designToolboxContextLine(
@@ -4430,9 +4518,14 @@ function MentionPopover({
                   onClick={() => onPickFile(key)}
                 >
                   <Icon name="file" size={12} />
-                  <code>{key}</code>
+                  <span className="mention-item-body">
+                    <strong>{projectFileMentionTitle(f, key)}</strong>
+                    <span className="mention-meta mention-meta--desc mention-meta--path">
+                      {projectFileMentionDescription(f, key)}
+                    </span>
+                  </span>
                   {f.size != null ? (
-                    <span className="mention-meta">{prettySize(f.size)}</span>
+                    <span className="mention-meta mention-item-kind">{prettySize(f.size)}</span>
                   ) : null}
                 </button>
               );
@@ -4465,7 +4558,7 @@ function MentionPopover({
                       {workspaceContextDescription(item)}
                     </span>
                   </span>
-                  <span className="mention-meta">{workspaceContextKindLabel(item.kind)}</span>
+                  <span className="mention-meta mention-item-kind">{workspaceContextKindLabel(item.kind)}</span>
                 </button>
               );
             })}
@@ -4478,6 +4571,8 @@ function MentionPopover({
               const flat = optionIndex;
               optionIndex += 1;
               const active = flat === activeIndex;
+              const pluginTitle = localizePluginTitle(locale, p);
+              const pluginDescription = localizePluginDescription(locale, p);
               return (
                 <button
                   key={`plugin-${p.id}`}
@@ -4488,16 +4583,16 @@ function MentionPopover({
                   type="button"
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => onPickPlugin(p)}
-                  title={p.manifest?.description ?? p.title}
+                  title={pluginDescription || pluginTitle}
                 >
                   <Icon name="sparkles" size={12} />
                   <span className="mention-item-body">
-                    <strong>{p.title}</strong>
+                    <strong>{pluginTitle}</strong>
                     <span className="mention-meta mention-meta--desc">
-                      {p.manifest?.description ?? p.id}
+                      {pluginDescription || p.id}
                     </span>
                   </span>
-                  <span className="mention-meta">{pluginSourceLabel(p, t)}</span>
+                  <span className="mention-meta mention-item-kind">{pluginSourceLabel(p, t)}</span>
                 </button>
               );
             })}
@@ -4530,7 +4625,7 @@ function MentionPopover({
                       {localizeSkillDescription(locale, skill) || skill.id}
                     </span>
                   </span>
-                  <span className="mention-meta">{isCurrent ? t('chat.mentionActiveSkill') : skill.mode}</span>
+                  <span className="mention-meta mention-item-kind">{isCurrent ? t('chat.mentionActiveSkill') : skill.mode}</span>
                 </button>
               );
             })}
@@ -4562,7 +4657,7 @@ function MentionPopover({
                       {server.url || server.command || server.id}
                     </span>
                   </span>
-                  <span className="mention-meta">{server.transport}</span>
+                  <span className="mention-meta mention-item-kind">{server.transport}</span>
                 </button>
               );
             })}
@@ -4594,7 +4689,7 @@ function MentionPopover({
                       {connector.description || connector.provider || connector.id}
                     </span>
                   </span>
-                  <span className="mention-meta">{connector.accountLabel ?? connector.provider}</span>
+                  <span className="mention-meta mention-item-kind">{connector.accountLabel ?? connector.provider}</span>
                 </button>
               );
             })}

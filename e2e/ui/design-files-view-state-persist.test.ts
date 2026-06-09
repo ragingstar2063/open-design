@@ -17,6 +17,7 @@
 
 import { expect, test } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { ensureRailOpen } from '@/playwright/rail';
 
 // Matches the constant in DesignFilesPanel.tsx
 const VIEW_STATE_KEY_PREFIX = 'od:design-files:view-state:v1:';
@@ -110,7 +111,7 @@ async function gotoEntryHome(page: Page): Promise<void> {
     .getByRole('dialog')
     .filter({ hasText: 'Help us improve Open Design' });
   if (await privacyDialog.isVisible().catch(() => false)) {
-    await privacyDialog.getByRole('button', { name: /not now/i }).click();
+    await privacyDialog.getByRole('button', { name: /I get it|not now|got it|don't share/i }).click();
     await expect(privacyDialog).toHaveCount(0);
   }
   await expect(page.getByTestId('home-hero')).toBeVisible();
@@ -118,6 +119,7 @@ async function gotoEntryHome(page: Page): Promise<void> {
 }
 
 async function createBlankProject(page: Page, name: string): Promise<string> {
+  await ensureRailOpen(page);
   await page.getByTestId('entry-nav-new-project').click();
   await expect(page.getByTestId('new-project-modal')).toBeVisible();
   await page.getByTestId('new-project-name').fill(name);

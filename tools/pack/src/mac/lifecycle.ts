@@ -27,6 +27,8 @@ import {
   stopProcesses,
 } from "@open-design/platform";
 import type { ToolPackConfig } from "../config.js";
+import { readToolPackLauncherRuntimeSnapshot } from "../launcher-runtime-snapshot.js";
+import { readToolPackUpdateCacheLifecycleSnapshot } from "../update-cache-lifecycle-snapshot.js";
 import { PACKAGED_CONFIG_PATH_ENV, writeLaunchPackagedConfig } from "./app-config.js";
 import { DESKTOP_LOG_ECHO_ENV } from "./constants.js";
 import { clearQuarantine, pathExists } from "./fs.js";
@@ -700,6 +702,8 @@ export async function inspectPackedMacApp(config: ToolPackConfig, options: { exp
         { timeoutMs: 5000 },
       ),
     }),
+    launcher: await readToolPackLauncherRuntimeSnapshot(config),
+    updateCache: await readToolPackUpdateCacheLifecycleSnapshot(config),
     ...(options.path == null ? {} : {
       screenshot: await requestJsonIpc<DesktopScreenshotResult>(
         stamp.ipc,

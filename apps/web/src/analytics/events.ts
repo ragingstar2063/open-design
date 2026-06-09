@@ -10,6 +10,7 @@ import type {
   HelpPopoverSurfaceViewProps,
   NewProjectModalSurfaceViewProps,
   PluginReplacementModalSurfaceViewProps,
+  PluginDetailModalSurfaceViewProps,
   DesignSystemsTemplatesModalSurfaceViewProps,
   AssistantFeedbackReasonPanelSurfaceViewProps,
   // ui_click
@@ -38,6 +39,7 @@ import type {
   PluginsSourcesTabClickProps,
   PluginDetailClickProps,
   PluginLoopClickProps,
+  CommunityGalleryClickProps,
   DesignSystemsTopClickProps,
   DesignSystemsTemplateCardClickProps,
   DesignSystemsTemplatesModalClickProps,
@@ -48,15 +50,21 @@ import type {
   IntegrationsSkillsTabClickProps,
   IntegrationsUseEverywhereTabClickProps,
   ChatPanelClickProps,
+  ComposerSessionModeClickProps,
+  ComposerBarClickProps,
+  DesignToolboxClickProps,
+  NextStepActionClickProps,
   RunFailedToastClickProps,
   AmrEntryClickProps,
   RunFailedToastSurfaceViewProps,
   ChatPanelResourcesPopoverClickProps,
   FileManagerClickProps,
+  TabLauncherClickProps,
   ArtifactToolbarClickProps,
   TweaksPopoverClickProps,
   CommentPopoverClickProps,
   ArtifactHeaderClickProps,
+  HandoffClickProps,
   PresentPopoverClickProps,
   ShareOptionPopoverClickProps,
   AssistantFeedbackButtonClickProps,
@@ -153,6 +161,13 @@ export function trackPluginReplacementModalSurfaceView(
 export function trackDesignSystemsTemplatesModalSurfaceView(
   track: Track,
   props: DesignSystemsTemplatesModalSurfaceViewProps,
+): void {
+  send(track, 'surface_view', props);
+}
+
+export function trackPluginDetailModalSurfaceView(
+  track: Track,
+  props: PluginDetailModalSurfaceViewProps,
 ): void {
   send(track, 'surface_view', props);
 }
@@ -367,6 +382,13 @@ export function trackPluginLoopClick(
   send(track, 'ui_click', props);
 }
 
+export function trackCommunityGalleryClick(
+  track: Track,
+  props: CommunityGalleryClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
 export function trackDesignSystemsTopClick(
   track: Track,
   props: DesignSystemsTopClickProps,
@@ -439,6 +461,34 @@ export function trackChatPanelClick(
   send(track, 'ui_click', props);
 }
 
+export function trackComposerSessionModeClick(
+  track: Track,
+  props: ComposerSessionModeClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackDesignToolboxClick(
+  track: Track,
+  props: DesignToolboxClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackComposerBarClick(
+  track: Track,
+  props: ComposerBarClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackNextStepActionClick(
+  track: Track,
+  props: NextStepActionClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
 export function trackChatPanelResourcesPopoverClick(
   track: Track,
   props: ChatPanelResourcesPopoverClickProps,
@@ -451,6 +501,13 @@ export function trackChatPanelResourcesPopoverClick(
 export function trackFileManagerClick(
   track: Track,
   props: FileManagerClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackTabLauncherClick(
+  track: Track,
+  props: TabLauncherClickProps,
 ): void {
   send(track, 'ui_click', props);
 }
@@ -479,6 +536,13 @@ export function trackCommentPopoverClick(
 export function trackArtifactHeaderClick(
   track: Track,
   props: ArtifactHeaderClickProps,
+): void {
+  send(track, 'ui_click', props);
+}
+
+export function trackHandoffClick(
+  track: Track,
+  props: HandoffClickProps,
 ): void {
   send(track, 'ui_click', props);
 }

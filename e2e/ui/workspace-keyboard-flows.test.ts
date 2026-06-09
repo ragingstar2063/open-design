@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { ensureRailOpen } from '@/playwright/rail';
 import type { Locator, Page, Response } from '@playwright/test';
 import { applyStandardMocks } from '@/playwright/mock-factory';
 
@@ -397,7 +398,7 @@ async function gotoEntryHome(page: Page) {
   await page.getByText('Loading Open Design…').waitFor({ state: 'detached', timeout: 10_000 }).catch(() => {});
   const privacyDialog = page.getByRole('dialog').filter({ hasText: 'Help us improve Open Design' });
   if (await privacyDialog.isVisible()) {
-    await privacyDialog.getByRole('button', { name: /not now/i }).click();
+    await privacyDialog.getByRole('button', { name: /I get it|not now|got it|don't share/i }).click();
     await expect(privacyDialog).toHaveCount(0);
   }
   await expect(page.getByTestId('home-hero')).toBeVisible();
@@ -405,6 +406,7 @@ async function gotoEntryHome(page: Page) {
 }
 
 async function openNewProjectModal(page: Page) {
+  await ensureRailOpen(page);
   await page.getByTestId('entry-nav-new-project').click();
   await expect(page.getByTestId('new-project-modal')).toBeVisible();
   await expect(page.getByTestId('new-project-panel')).toBeVisible();
@@ -412,6 +414,7 @@ async function openNewProjectModal(page: Page) {
 
 async function expectProjectsView(page: Page) {
   if ((await page.locator('.tab-panel-toolbar').count()) === 0) {
+    await ensureRailOpen(page);
     await page.getByTestId('entry-nav-projects').click();
   }
   await expect(page.locator('.tab-panel-toolbar')).toBeVisible();

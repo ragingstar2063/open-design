@@ -9,11 +9,10 @@ import {
   replaceProjectWorkingDir,
 } from '../providers/registry';
 import { useT } from '../i18n';
+import { useAnalytics } from '../analytics/provider';
+import { trackComposerBarClick } from '../analytics/events';
 import type { Project } from '../types';
 import { Icon } from './Icon';
-
-const RECENT_DIRS_KEY = 'open-design:recent-working-dirs';
-const RECENT_DIRS_LIMIT = 6;
 
 interface Props {
   projectId: string;
@@ -25,38 +24,16 @@ interface Props {
   }) => void;
 }
 
-function readRecent(): string[] {
-  try {
-    const raw = window.localStorage.getItem(RECENT_DIRS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((value): value is string => typeof value === 'string').slice(0, RECENT_DIRS_LIMIT);
-  } catch {
-    return [];
-  }
-}
-
-function pushRecent(dir: string): void {
-  try {
-    const prev = readRecent();
-    const next = [dir, ...prev.filter((item) => item !== dir)].slice(0, RECENT_DIRS_LIMIT);
-    window.localStorage.setItem(RECENT_DIRS_KEY, JSON.stringify(next));
-  } catch {
-    // Best-effort local convenience only.
-  }
-}
-
 function shortPath(dir: string): string {
-  return dir.split('/').filter(Boolean).slice(-1)[0] ?? dir;
+  return dir.split(/[/\\]/).filter(Boolean).slice(-1)[0] ?? dir;
 }
 
 export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onReplaced }: Props) {
   const t = useT();
+  const analytics = useAnalytics();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [recents, setRecents] = useState<string[]>(() => readRecent());
   const [fetchedDir, setFetchedDir] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -82,6 +59,11 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
   }, [projectId, propResolvedDir]);
 
   const resolvedDir = fetchedDir ?? propResolvedDir ?? null;
+  // Default-storage projects live at `.od/projects/<projectId>`, so the
+  // working dir's basename is the raw project UUID. Surfacing that to users
+  // is meaningless noise; show a friendly label instead. A user-picked /
+  // imported folder has a real basename and falls through to `shortPath`.
+  const isDefaultStorage = resolvedDir != null && shortPath(resolvedDir) === projectId;
 
   useEffect(() => {
     if (!open) return;
@@ -100,9 +82,17 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
     };
   }, [open]);
 
-  useEffect(() => {
-    if (open) setRecents(readRecent());
-  }, [open]);
+  // Both working-dir replacement paths (browser/fallback `applyDir` and the
+  // desktop host `handlePickDir`) funnel their success through this so the
+  // event fires once per successful switch on every platform.
+  function trackWorkingDirSwitch() {
+    trackComposerBarClick(analytics.track, {
+      page_name: 'chat_panel',
+      area: 'chat_composer',
+      element: 'working_dir_switch',
+      project_id: projectId,
+    });
+  }
 
   async function applyDir(dir: string) {
     setError(null);
@@ -110,7 +100,7 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
     setOpen(false);
     try {
       const result = await replaceProjectWorkingDir(projectId, dir);
-      pushRecent(result.baseDir);
+      trackWorkingDirSwitch();
       setFetchedDir(result.baseDir);
       onReplaced?.({
         baseDir: result.baseDir,
@@ -132,7 +122,7 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
       try {
         const result = await pickAndReplaceHostProjectWorkingDir(projectId);
         if (result.ok) {
-          pushRecent(result.baseDir);
+          trackWorkingDirSwitch();
           setFetchedDir(result.baseDir);
           onReplaced?.({
             baseDir: result.baseDir,
@@ -191,8 +181,6 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
     }
   }
 
-  const showRecents = !isOpenDesignHostAvailable();
-
   return (
     <div
       ref={wrapRef}
@@ -205,11 +193,17 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
         data-testid="working-dir-pill-trigger"
         onClick={() => setOpen((value) => !value)}
         disabled={busy}
-        title={resolvedDir ?? t('workingDirPicker.title')}
+        title={isDefaultStorage ? t('workingDirPicker.defaultLabel') : (resolvedDir ?? t('workingDirPicker.title'))}
       >
         <Icon name="folder" size={12} />
         <span className="working-dir-pill-label">
-          {busy ? t('workingDirPicker.processing') : resolvedDir ? shortPath(resolvedDir) : t('workingDirPicker.select')}
+          {busy
+            ? t('workingDirPicker.processing')
+            : isDefaultStorage
+              ? t('workingDirPicker.defaultLabel')
+              : resolvedDir
+                ? shortPath(resolvedDir)
+                : t('workingDirPicker.select')}
         </span>
         <Icon name="chevron-down" size={10} />
       </button>
@@ -244,29 +238,6 @@ export function WorkingDirPill({ projectId, resolvedDir: propResolvedDir, onRepl
             <Icon name="folder" size={12} />
             <span>{t('workingDirPicker.replace')}</span>
           </button>
-          {showRecents && recents.filter((item) => item !== resolvedDir).length > 0 ? (
-            <>
-              <div className="working-dir-pill-menu-divider" />
-              <div className="working-dir-pill-menu-section">{t('workingDirPicker.recent')}</div>
-              {recents
-                .filter((item) => item !== resolvedDir)
-                .map((dir) => (
-                  <button
-                    key={dir}
-                    type="button"
-                    role="menuitem"
-                    className="working-dir-pill-menu-item small"
-                    title={dir}
-                    onClick={() => void applyDir(dir)}
-                  >
-                    <Icon name="folder" size={12} />
-                    <span className="working-dir-pill-menu-recent">
-                      {dir.split('/').filter(Boolean).slice(-2).join('/')}
-                    </span>
-                  </button>
-                ))}
-            </>
-          ) : null}
           {error ? (
             <>
               <div className="working-dir-pill-menu-divider" />

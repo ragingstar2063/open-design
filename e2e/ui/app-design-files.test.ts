@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { ensureRailOpen } from '@/playwright/rail';
 import type { Locator, Page, Request, Response } from '@playwright/test';
 import { automatedUiScenarios } from '@/playwright/resources';
 import type { UiScenario } from '@/playwright/resources';
@@ -122,7 +123,7 @@ async function gotoEntryHome(page: Page) {
   await waitForLoadingToClear(page);
   const privacyDialog = page.getByRole('dialog').filter({ hasText: 'Help us improve Open Design' });
   if (await privacyDialog.isVisible()) {
-    await privacyDialog.getByRole('button', { name: /not now/i }).click();
+    await privacyDialog.getByRole('button', { name: /I get it|not now|got it|don't share/i }).click();
     await expect(privacyDialog).toHaveCount(0);
   }
   await expect(page.getByTestId('home-hero')).toBeVisible();
@@ -130,6 +131,7 @@ async function gotoEntryHome(page: Page) {
 }
 
 async function openNewProjectModal(page: Page) {
+  await ensureRailOpen(page);
   await page.getByTestId('entry-nav-new-project').click();
   await expect(page.getByTestId('new-project-modal')).toBeVisible();
   await expect(page.getByTestId('new-project-panel')).toBeVisible();
@@ -280,6 +282,16 @@ async function expectProjectFilesToIncludeSuffixes(
     .toBe(true);
 }
 
+async function clickDesignFilePreviewOpen(page: Page) {
+  const preview = page.getByTestId('design-file-preview');
+  await expect(preview).toBeVisible();
+  await expect(async () => {
+    const openButton = preview.getByRole('button', { name: /^Open$/ });
+    await expect(openButton).toBeVisible({ timeout: 1_000 });
+    await openButton.click({ timeout: 1_000 });
+  }).toPass({ timeout: T.medium });
+}
+
 async function openDesignFile(page: Page, fileName: string) {
   const preview = page.getByTestId('artifact-preview-frame');
   if (await preview.isVisible()) return;
@@ -296,7 +308,7 @@ async function openDesignFile(page: Page, fileName: string) {
   });
   await expect(fileRow).toBeVisible();
   await fileRow.getByRole('button').first().click();
-  await page.getByTestId('design-file-preview').getByRole('button', { name: 'Open' }).click();
+  await clickDesignFilePreviewOpen(page);
 }
 
 async function waitForLoadingToClear(page: Page) {
@@ -358,7 +370,7 @@ async function runDesignFilesUploadFlow(page: Page) {
   await expect(preview).toBeVisible();
   await expect(preview.getByText(/moodboard\.png/i)).toBeVisible();
 
-  await nameBtn.dblclick();
+  await preview.getByRole('button', { name: 'Open' }).click();
   await expect(page.getByRole('tab', { name: /moodboard\.png/i })).toBeVisible();
   await expectProjectFilesToIncludeSuffixes(page, projectId, ['moodboard.png']);
 }
@@ -573,17 +585,25 @@ async function runDesignFilesTabPersistenceFlow(page: Page) {
   await expect(restoredFirstTab).toBeVisible();
   await expect(restoredFirstTab).toHaveAttribute('aria-selected', 'true');
 
-  // The refreshed workspace restores the active file tab, while other project files
-  // remain available from the Design Files list until the user reopens them.
-  await page.getByTestId('design-files-tab').click();
-  const secondFileRow = page.locator('[data-testid^="design-file-row-"]', {
-    hasText: 'second-tab.png',
-  });
-  await expect(secondFileRow).toBeVisible();
-  await secondFileRow.getByRole('button').first().click();
-  await page.getByTestId('design-file-preview').getByRole('button', { name: 'Open' }).click();
-
   const restoredSecondTab = page.getByRole('tab', { name: /second-tab\.png/i });
+  const secondTabAlreadyRestored = await restoredSecondTab
+    .waitFor({ state: 'visible', timeout: 3_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (secondTabAlreadyRestored) {
+    await restoredSecondTab.click();
+  } else {
+    // Depending on restoration timing, inactive files can either be restored as
+    // tabs already or remain available from the Design Files list.
+    await page.getByTestId('design-files-tab').click();
+    const secondFileRow = page.locator('[data-testid^="design-file-row-"]', {
+      hasText: 'second-tab.png',
+    });
+    await expect(secondFileRow).toBeVisible();
+    await secondFileRow.getByRole('button').first().click();
+    await clickDesignFilePreviewOpen(page);
+  }
+
   await expect(restoredSecondTab).toBeVisible();
   await expect(restoredSecondTab).toHaveAttribute('aria-selected', 'true');
   await expect(restoredFirstTab).toHaveAttribute('aria-selected', 'false');

@@ -7,7 +7,7 @@ import {
   type TrackingAmrEntrySource,
 } from '../analytics/amr-attribution';
 import type { Dict } from '../i18n/types';
-import { AMR_RECHARGE_URL } from '../runtime/amr-guidance';
+import { amrRechargeUrlForProfile } from '../runtime/amr-guidance';
 import type { GenerationPreviewModel } from '../runtime/generation-preview';
 import { Icon } from './Icon';
 import styles from './GenerationPreviewStage.module.css';
@@ -21,6 +21,7 @@ type Props = {
   onLaunchTerminalAuth?: (() => void) | undefined;
   amrAuthorizeSourceDetail?: TrackingAmrEntrySource;
   amrRechargeSourceDetail?: TrackingAmrEntrySource;
+  amrProfile?: string | null;
   // "Switch to AMR" promotion card, pre-built by the parent and rendered under
   // the actions for the non-AMR auth/quota cases (see model.promoteAmrSwitch).
   amrGuidance?: ReactNode;
@@ -54,6 +55,7 @@ export function GenerationPreviewStage({
   onLaunchTerminalAuth,
   amrAuthorizeSourceDetail,
   amrRechargeSourceDetail,
+  amrProfile,
   amrGuidance,
 }: Props) {
   const t = useT();
@@ -82,6 +84,11 @@ export function GenerationPreviewStage({
 
   // For failures prefer the case-specific copy (AMR auth / balance) over the
   // raw upstream string, mirroring the chat error card's `displayError`.
+  // While generating we deliberately DON'T surface the agent's raw
+  // thinking/streaming snippet (model.activityLabel) here — it leaked
+  // half-formed narration like "品牌留空走 Branch B…核" into the panel. The
+  // phase chips plus the concrete substatus line (current task + count) carry
+  // enough live signal. Only the terminal phases keep a lead message.
   const lead =
     model.phase === 'failed'
       ? model.failureUi?.messageKey
@@ -91,7 +98,7 @@ export function GenerationPreviewStage({
         ? t('generationPreview.stoppedLead')
         : model.phase === 'awaiting-input'
           ? t('generationPreview.awaitingLead')
-          : model.activityLabel;
+          : null;
 
   const markIcon =
     model.phase === 'failed' ? 'close' : model.phase === 'stopped' ? 'stop' : 'sparkles';
@@ -114,9 +121,7 @@ export function GenerationPreviewStage({
       </div>
       <h1 className={styles.title}>{title}</h1>
       {!showSubstatus && lead ? (
-        <p className={styles.lead} data-live={generating && Boolean(model.activityLabel)}>
-          {lead}
-        </p>
+        <p className={styles.lead}>{lead}</p>
       ) : null}
       <ol className={styles.steps}>
         {model.steps
@@ -193,7 +198,7 @@ export function GenerationPreviewStage({
                   amrRechargeSourceDetail ?? 'generation_preview_recharge',
                 );
                 window.open(
-                  attributedAmrUrl(AMR_RECHARGE_URL, attribution),
+                  attributedAmrUrl(amrRechargeUrlForProfile(amrProfile), attribution),
                   '_blank',
                   'noopener,noreferrer',
                 );
