@@ -24,6 +24,8 @@ interface Props {
 }
 
 export function PreviewSurface({ pluginId, pluginTitle, preview, eager = false }: Props) {
+  const usesBakedClipKeepalive =
+    preview.kind === 'media' && preview.mediaType === 'video' && preview.loopHoldMs != null;
   // Three nested visibility zones for a baked clip:
   //  - `inView` (tight): mount cheap-but-live content — iframes, design surfaces.
   //    Kept tight so a 350-plugin gallery never spins up dozens of live iframes.
@@ -68,7 +70,7 @@ export function PreviewSurface({ pluginId, pluginTitle, preview, eager = false }
         <MediaSurface
           preview={preview}
           pluginTitle={pluginTitle}
-          inView={keep}
+          inView={usesBakedClipKeepalive ? keep : inView}
           visible={visible}
         />
       ) : preview.kind === 'html' ? (
