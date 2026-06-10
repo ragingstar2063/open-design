@@ -83,6 +83,25 @@ describe("buildAgentCliLogSources", () => {
     }
   });
 
+  it("honors an explicit amrOpenCodeHome override over the dataDir default", async () => {
+    const home = join(tempDir, "home");
+    const dataDir = join(tempDir, "data");
+    const overrideHome = join(tempDir, "custom-amr-home");
+    // Default location has a log, but the override points elsewhere — only the
+    // override's logs should be swept (mirrors a user OPENCODE_TEST_HOME).
+    await touch(
+      join(dataDir, "amr", "opencode-home", ".local", "share", "opencode", "log", "default.log"),
+    );
+    await touch(
+      join(overrideHome, ".local", "share", "opencode", "log", "override.log"),
+    );
+
+    const sources = await buildAgentCliLogSources({ homeDir: home, dataDir, amrOpenCodeHome: overrideHome });
+    const amrNames = sources.filter((s) => s.name.startsWith("agent-cli-logs/amr/")).map((s) => s.name);
+    expect(amrNames).toContain("agent-cli-logs/amr/override.log");
+    expect(amrNames).not.toContain("agent-cli-logs/amr/default.log");
+  });
+
   it("honors XDG_DATA_HOME for the opencode user log dir", async () => {
     const home = join(tempDir, "home");
     const xdg = join(tempDir, "xdg");

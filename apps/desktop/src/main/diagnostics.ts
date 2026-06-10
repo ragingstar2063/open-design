@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -39,6 +39,30 @@ function safeUsername(): string | undefined {
     return info?.username && info.username.length > 0 ? info.username : undefined;
   } catch {
     return undefined;
+  }
+}
+
+// Best-effort read of a user `agentCliEnv.amr.OPENCODE_TEST_HOME` override from
+// the daemon's app-config so the AMR log sweep targets the same OpenCode home a
+// real run uses. The daemon resolves this authoritatively via spawnEnvForAgent;
+// the desktop main process may not import daemon internals, so it reads the
+// config file directly and applies only leading-`~` expansion (overrides are
+// effectively always absolute). Returns null on any miss; the collector then
+// falls back to the default `<dataDir>/amr/opencode-home`.
+async function readAmrOpenCodeHomeOverride(dataDir: string): Promise<string | null> {
+  try {
+    const raw = await readFile(join(dataDir, "app-config.json"), "utf8");
+    const parsed = JSON.parse(raw) as {
+      agentCliEnv?: { amr?: Record<string, unknown> };
+    };
+    const value = parsed.agentCliEnv?.amr?.OPENCODE_TEST_HOME;
+    if (typeof value !== "string" || value.trim().length === 0) return null;
+    const trimmed = value.trim();
+    if (trimmed === "~") return homedir();
+    if (trimmed.startsWith("~/")) return join(homedir(), trimmed.slice(2));
+    return trimmed;
+  } catch {
+    return null;
   }
 }
 
@@ -129,6 +153,12 @@ export async function exportDiagnosticsToFile(
       ...(await buildAgentCliLogSources({
         homeDir: homedir(),
         dataDir,
+        // Honor a user `agentCliEnv.amr.OPENCODE_TEST_HOME` override so the AMR
+        // provider logs are not missed when it points outside the default home.
+        // The daemon resolves this authoritatively; here (no daemon imports
+        // allowed) we read the override straight from app-config and fall back
+        // to the dataDir default when absent.
+        amrOpenCodeHome: await readAmrOpenCodeHomeOverride(dataDir),
         xdgDataHome: process.env.XDG_DATA_HOME ?? null,
       })),
     ];

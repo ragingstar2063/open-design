@@ -91,8 +91,15 @@ async function latestLogFilesIn(
 export interface AgentCliLogOptions {
   /** User home directory; CLI configs/logs live under here. */
   homeDir: string;
-  /** Open Design data dir (OD_DATA_DIR), used for the AMR-managed OpenCode home. */
+  /** Open Design data dir (OD_DATA_DIR); fallback location of the AMR OpenCode home. */
   dataDir?: string | null;
+  /**
+   * Effective AMR OpenCode home (the resolved `OPENCODE_TEST_HOME`). Callers
+   * should pass the value a real AMR run would use so this honors a user
+   * `agentCliEnv.amr.OPENCODE_TEST_HOME` override; when omitted we fall back to
+   * the default `<dataDir>/amr/opencode-home`.
+   */
+  amrOpenCodeHome?: string | null;
   /** XDG_DATA_HOME, if set, used for OpenCode's data dir resolution. */
   xdgDataHome?: string | null;
   /** Max log files to include per agent (most-recent first). */
@@ -135,14 +142,19 @@ export async function buildAgentCliLogSources(options: AgentCliLogOptions): Prom
     { agent: "opencode", dir: openCodeUserLogDir },
   ];
 
+  // AMR drives a private OpenCode under OPENCODE_TEST_HOME; its session logs
+  // land under that home's XDG data dir, where AMR run provider failures are
+  // recorded. Prefer the effective home a real run resolves (honoring a user
+  // `agentCliEnv.amr.OPENCODE_TEST_HOME` override) and fall back to the default
+  // `<dataDir>/amr/opencode-home` so the bundle does not silently drop the very
+  // AMR logs this is meant to surface.
+  const amrHome = options.amrOpenCodeHome?.trim();
   const dataDir = options.dataDir?.trim();
-  if (dataDir) {
-    // AMR drives a private OpenCode under OPENCODE_TEST_HOME =
-    // <dataDir>/amr/opencode-home, so its session logs land under that home's
-    // XDG data dir. This is where AMR run provider failures are recorded.
+  const amrOpenCodeHome = amrHome || (dataDir ? join(dataDir, "amr", "opencode-home") : "");
+  if (amrOpenCodeHome) {
     agentDirs.push({
       agent: "amr",
-      dir: join(dataDir, "amr", "opencode-home", ".local", "share", "opencode", "log"),
+      dir: join(amrOpenCodeHome, ".local", "share", "opencode", "log"),
     });
   }
 

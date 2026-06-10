@@ -25,6 +25,26 @@ import {
 } from '@open-design/sidecar';
 
 import { readCurrentAppVersionInfo } from './app-version.js';
+import { agentCliEnvForAgent, readAppConfig } from './app-config.js';
+import { spawnEnvForAgent } from './agents.js';
+
+// Resolve the AMR OpenCode home (OPENCODE_TEST_HOME) exactly as a real AMR run
+// would, so the diagnostics sweep honors a user `agentCliEnv.amr.OPENCODE_TEST_HOME`
+// override instead of only looking under the default `<dataDir>/amr/opencode-home`.
+// Reuses the live env resolver so the two cannot drift. Returns null on any
+// failure; the collector then falls back to the dataDir default.
+async function resolveAmrOpenCodeHome(dataDir: string | null | undefined): Promise<string | null> {
+  if (!dataDir) return null;
+  try {
+    const appConfig = await readAppConfig(dataDir);
+    const configuredEnv = agentCliEnvForAgent(appConfig.agentCliEnv, 'amr');
+    const amrEnv = spawnEnvForAgent('amr', { ...process.env, OD_DATA_DIR: dataDir }, configuredEnv);
+    const home = amrEnv.OPENCODE_TEST_HOME?.trim();
+    return home && home.length > 0 ? home : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface DiagnosticsHandlerOptions {
   /** Sidecar runtime context, present when daemon is launched via tools-dev or packaged sidecar. */
@@ -99,12 +119,14 @@ export function createDiagnosticsExportHandler(options: DiagnosticsHandlerOption
     try {
       const versionInfo = await readCurrentAppVersionInfo().catch(() => null);
       const home = homedir();
+      const amrOpenCodeHome = await resolveAmrOpenCodeHome(options.dataDir);
       const sources = [
         ...buildSidecarLogSources(options.runtime),
         ...(await buildRunEventLogSources(options.runsDir)),
         ...(await buildAgentCliLogSources({
           homeDir: home,
           dataDir: options.dataDir ?? null,
+          amrOpenCodeHome,
           xdgDataHome: process.env.XDG_DATA_HOME ?? null,
         })),
       ];
