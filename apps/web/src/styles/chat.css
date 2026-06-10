@@ -1030,15 +1030,18 @@
   padding: 8px 14px;
 }
 
+/* Same accent CTA treatment as .amr-card__cta / the failed-run switch
+   button — `var(--text)` as a background turns white-on-white in dark
+   theme, so never use it for filled buttons. */
 .amr-preflight-primary {
   color: white;
-  background: var(--text);
-  border: 1px solid var(--text);
+  background: var(--accent);
+  border: 1px solid var(--accent);
 }
 
 .amr-preflight-primary:hover {
-  background: var(--text-muted);
-  border-color: var(--text-muted);
+  background: var(--accent-hover, var(--accent));
+  border-color: var(--accent-hover, var(--accent));
 }
 
 .amr-preflight-secondary {
