@@ -66,11 +66,9 @@ describe('resolveAmrSendPreflightIssue', () => {
     ).toBeNull();
   });
 
-  it('blocks a missing local agent after the agent probe has settled', () => {
-    expect(resolveAmrSendPreflightIssue(baseConfig, [])).toEqual({
-      kind: 'agent-unavailable',
-      agentId: 'claude',
-    });
+  it('does not treat an absent agent entry as confirmed unavailable', () => {
+    expect(resolveAmrSendPreflightIssue(baseConfig, [])).toBeNull();
+    expect(resolveAmrSendPreflightIssue(baseConfig, [agent({ id: 'codex' })])).toBeNull();
   });
 
   it('blocks when no local agent is selected', () => {

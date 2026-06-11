@@ -86,7 +86,7 @@ test('[P0] AMR insufficient-balance failures surface Top up AMR and keep Retry a
     .toContainEqual(expect.stringMatching(/^https:\/\/open-design\.ai\/amr\/wallet(?:\?|$)/));
 });
 
-test('[P0] AMR auth failures offer Authorize & retry and open AMR authorization controls', async ({ page }) => {
+test('[P0] AMR auth failures offer Sign in & retry and open AMR sign-in controls', async ({ page }) => {
   let loggedIn = false;
   await page.route('**/api/integrations/vela/status', async (route) => {
     await route.fulfill({
@@ -126,15 +126,15 @@ test('[P0] AMR auth failures offer Authorize & retry and open AMR authorization 
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR auth failure recovery smoke');
 
-  const authorizeAndRetry = page.getByRole('button', { name: /Authorize.*retry|授权并重试/i }).first();
-  await expect(authorizeAndRetry).toBeVisible({ timeout: 15_000 });
-  await authorizeAndRetry.click();
+  const signInAndRetry = page.getByRole('button', { name: /Sign in.*retry|登录并重试/i }).first();
+  await expect(signInAndRetry).toBeVisible({ timeout: 15_000 });
+  await signInAndRetry.click();
 
   const settings = page.getByRole('dialog');
   await expect(settings).toBeVisible({ timeout: 10_000 });
-  const authorize = settings.getByRole('button', { name: /^Authorize$|^授权$/i });
-  await expect(authorize).toBeVisible();
-  await authorize.click();
+  const signIn = settings.getByRole('button', { name: /^Sign in$|^登录$/i });
+  await expect(signIn).toBeVisible();
+  await signIn.click();
 
   await expect(settings.getByRole('button', { name: /^Sign out$|^退出登录$/i })).toBeVisible({
     timeout: 10_000,
@@ -147,10 +147,10 @@ test('[P0] after an AMR failure the user can switch to Codex and complete a fres
   await gotoProject(page, amr.projectId);
   await sendPrompt(page, 'AMR auth failure before switch smoke');
   await expect(page.locator('.msg.error')).toContainText(
-    /isn't authorized yet|Authorize it and this run retries automatically/i,
+    /isn't signed in yet|Sign in and this run retries automatically/i,
     { timeout: 15_000 },
   );
-  await expect(page.getByRole('button', { name: /Authorize.*retry|授权并重试/i }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: /Sign in.*retry|登录并重试/i }).first()).toBeVisible();
 
   const settings = await openSettingsDialog(page);
   await settings.getByTestId('settings-agent-select-codex').click();

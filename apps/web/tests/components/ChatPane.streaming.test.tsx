@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatPane, buildRunErrorDiagnosticText, retryableAssistantMessage } from '../../src/components/ChatPane';
 import { DESIGN_SYSTEM_WORKSPACE_PROMPT_PREFIX } from '../../src/design-system-auto-prompt';
 import { readExpandedIndexCss } from '../helpers/read-expanded-css';
-import type { AppConfig, ChatMessage, Conversation, ProjectMetadata } from '../../src/types';
+import type { AgentInfo, AppConfig, ChatMessage, Conversation, ProjectMetadata } from '../../src/types';
 
 const composerMocks = vi.hoisted(() => ({
   focus: vi.fn(),
@@ -799,7 +799,7 @@ Expected output:
     expect(screen.queryByText('chat.amrPreflight.title')).toBeNull();
   });
 
-  it('blocks a settled missing local CLI when the AMR handoff is wired', async () => {
+  it('does not block when the selected local CLI is absent from incomplete probe data', () => {
     const onSend = vi.fn();
     render(
       <ChatPane
@@ -819,6 +819,40 @@ Expected output:
         projectMetadata={projectMetadata}
         config={localCliConfig}
         agents={[]}
+        agentsLoading={false}
+        onOpenSettings={vi.fn()}
+        onOpenAmrSettings={vi.fn()}
+        onSwitchToAmrAndSend={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('composer-submit'));
+
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(composerMocks.restoreDraft).not.toHaveBeenCalled();
+    expect(screen.queryByText('chat.amrPreflight.title')).toBeNull();
+  });
+
+  it('blocks a diagnosed unavailable local CLI when the AMR handoff is wired', async () => {
+    const onSend = vi.fn();
+    render(
+      <ChatPane
+        projectKindForTracking="prototype"
+        messages={[]}
+        streaming={false}
+        error={null}
+        projectId="project-1"
+        projectFiles={[]}
+        onEnsureProject={async () => 'project-1'}
+        onSend={onSend}
+        onStop={vi.fn()}
+        conversations={conversations}
+        activeConversationId="conv-1"
+        onSelectConversation={vi.fn()}
+        onDeleteConversation={vi.fn()}
+        projectMetadata={projectMetadata}
+        config={localCliConfig}
+        agents={[unavailableClaudeAgent]}
         agentsLoading={false}
         onOpenSettings={vi.fn()}
         onOpenAmrSettings={vi.fn()}
@@ -1138,4 +1172,13 @@ const localCliConfig: AppConfig = {
   agentId: 'claude',
   skillId: null,
   designSystemId: null,
+};
+
+const unavailableClaudeAgent: AgentInfo = {
+  id: 'claude',
+  name: 'Claude Code',
+  bin: 'claude',
+  available: false,
+  authStatus: 'ok',
+  diagnostics: [{ reason: 'not-on-path', severity: 'error', message: 'Missing CLI' }],
 };

@@ -48,7 +48,11 @@ export function resolveAmrSendPreflightIssue(
   const selectedAgent = agents?.find((agent) => agent.id === agentId);
   if (!selectedAgent) {
     if (options.agentsLoading) return null;
-    return { kind: 'agent-unavailable', agentId };
+    // The daemon registry emits known local CLIs even when they are not
+    // installed, with availability diagnostics attached. If an id is absent
+    // entirely, the client likely has incomplete probe data or a test/custom
+    // agent id, so let the existing run path own the outcome.
+    return null;
   }
 
   if (selectedAgent.authStatus === 'missing') {
