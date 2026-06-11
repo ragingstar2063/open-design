@@ -1405,8 +1405,9 @@ export function SettingsDialog({
   const handleUseAmrRescue = useCallback(() => {
     recordAmrEntry(analytics.track, 'settings_config_failure_amr');
     setCfg((c) => ({ ...c, mode: 'daemon' as const, agentId: 'amr' }));
-    // The daemon pane (and the AMR card ref) only exists after the mode
-    // switch re-renders, so defer the scroll/highlight past that render.
+    // The promoted AMR card sits above the mode tabs and is always mounted,
+    // but the coachmark anchor inside it only exists once the card is active,
+    // so defer the scroll/highlight past that re-render.
     window.setTimeout(() => {
       amrCardRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       setAmrCoachmarkDismissed(false);
@@ -2785,7 +2786,13 @@ export function SettingsDialog({
     about: { title: t('settings.about'), subtitle: t('settings.aboutHint') },
   };
   const activeHeader = sectionHeader[activeSection];
-  const installedAgents = agents.filter((a) => a.available);
+  // The available AMR agent renders as a promoted card above the Local CLI /
+  // BYOK tabs (visible from both), so the CLI list excludes it to avoid
+  // recommending AMR twice in one screen.
+  const promotedAmrAgent = agents.find((a) => a.id === 'amr' && a.available) ?? null;
+  const installedAgents = agents.filter(
+    (a) => a.available && a.id !== 'amr',
+  );
   const unavailableAgents = agents.filter((a) => !a.available);
   const initialAgentScanRunning = agentsLoading && agents.length === 0;
   const agentModelOptionLabel = (
@@ -3285,6 +3292,155 @@ export function SettingsDialog({
           <div className="settings-content" ref={settingsContentRef}>
           {activeSection === 'execution' ? (
             <>
+              {promotedAmrAgent ? (() => {
+                const a = promotedAmrAgent;
+                const active = cfg.mode === 'daemon' && cfg.agentId === 'amr';
+                const amrBenefits = [
+                  t('settings.amrBenefitOfficial'),
+                  t('settings.amrBenefitLowerPrice'),
+                  t('settings.amrBenefitManyModels'),
+                ];
+                const amrCardEmail =
+                  active && amrCardStatus?.loggedIn
+                    ? amrCardStatus.user?.email || t('settings.amrSignedIn')
+                    : '';
+                const amrCardProfileBadge =
+                  active && amrCardStatus?.loggedIn
+                    ? amrProfileBadgeLabel(amrCardStatus.profile)
+                    : null;
+                const amrRevealPendingCancelAction =
+                  active &&
+                  hoveredAgentCardId === a.id &&
+                  amrCardStatus?.loggedIn !== true &&
+                  amrCardStatus?.loginInFlight === true;
+                return (
+                  <div
+                    ref={amrCardRef}
+                    data-testid="settings-agent-card-amr"
+                    className={
+                      'agent-card agent-card-installed agent-card--amr-promoted' +
+                      (active ? ' active' : '') +
+                      (amrHighlightActive ? ' agent-card--amr-highlight' : '')
+                    }
+                    onMouseEnter={() => {
+                      if (!active) return;
+                      setHoveredAgentCardId(a.id);
+                    }}
+                    onMouseLeave={() => {
+                      if (hoveredAgentCardId !== a.id) return;
+                      setHoveredAgentCardId(null);
+                    }}
+                  >
+                    <div className="agent-card-main">
+                      <button
+                        type="button"
+                        className="agent-card-select"
+                        data-testid="settings-agent-select-amr"
+                        onClick={() => {
+                          trackSettingsLocalCliClick(analytics.track, {
+                            page_name: 'settings',
+                            area: 'configure_execution_mode_local_cli',
+                            element: 'cli_provider',
+                            cli_provider_id: agentIdToTracking(a.id),
+                            install_status: 'installed',
+                          });
+                          recordAmrEntry(analytics.track, 'settings_amr_agent_card');
+                          setCfg((c) => ({
+                            ...c,
+                            mode: 'daemon' as const,
+                            agentId: a.id,
+                          }));
+                        }}
+                        aria-pressed={active}
+                      >
+                        <AgentIcon id={a.id} size={32} />
+                        <div className="agent-card-body">
+                          <div className="agent-card-name agent-card-name--amr">
+                            <span className="agent-card-title">
+                              {displayAgentName(a)}
+                            </span>
+                            <span
+                              className="agent-card-benefits"
+                              aria-hidden="true"
+                            >
+                              {amrBenefits.map((benefit) => (
+                                <span
+                                  key={benefit}
+                                  className="agent-card-benefit"
+                                >
+                                  {benefit}
+                                </span>
+                              ))}
+                            </span>
+                          </div>
+                          {amrCardEmail ? (
+                            <div className="agent-card-amr-email">
+                              <span
+                                className="agent-card-amr-email-text"
+                                title={amrCardEmail}
+                              >
+                                {amrCardEmail}
+                              </span>
+                              {amrCardProfileBadge ? (
+                                <span className="agent-card-amr-profile-badge">
+                                  {amrCardProfileBadge}
+                                </span>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                      {active && amrCardStatusReady ? (
+                        <span
+                          className="amr-auth-anchor"
+                          onMouseEnter={() => setAmrCoachmarkDismissed(true)}
+                        >
+                          {amrCoachmarkArmed &&
+                          amrCardStatus?.loggedIn === false &&
+                          !amrCoachmarkDismissed ? (
+                            <span className="amr-coachmark" aria-hidden="true">
+                              <span className="amr-coachmark__ring" />
+                              <svg
+                                className="amr-coachmark__cursor"
+                                width="22"
+                                height="22"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                              >
+                                <path
+                                  d="M9.4 13V8a1.8 1.8 0 0 1 3.6 0v4.6c.35-.55 1-.95 1.75-.95.65 0 1.25.32 1.6.85.32-.5.9-.8 1.55-.8.8 0 1.5.5 1.78 1.2.35-.3.8-.5 1.3-.5 1.1 0 2 .9 2 2v3.05a5.6 5.6 0 0 1-5.6 5.6h-2.5a5 5 0 0 1-3.75-1.7l-4.2-4.75a1.85 1.85 0 0 1 2.65-2.6L9.4 16Z"
+                                  fill="#fff"
+                                  stroke="#1a1a1a"
+                                  strokeWidth="1.1"
+                                  strokeLinejoin="round"
+                                />
+                              </svg>
+                            </span>
+                          ) : null}
+                          <AmrLoginPill
+                            className="agent-card-amr-auth"
+                            hideSignedOutStatus
+                            hideSignedInStatus
+                            initialStatus={amrCardStatus}
+                            skipInitialRefresh
+                            signInLabel={t('settings.amrAuthorize')}
+                            showConsoleAction={amrCardStatus?.loggedIn === true}
+                            amrEntrySourceDetail="settings_amr_authorize"
+                            revealPendingCancelAction={amrRevealPendingCancelAction}
+                            onStatusChange={setAmrCardStatus}
+                          />
+                        </span>
+                      ) : (
+                        <div
+                          className="agent-card-amr-auth agent-card-amr-auth--placeholder"
+                          aria-hidden="true"
+                        />
+                      )}
+                    </div>
+                    {active ? renderAgentModelConfig(a) : null}
+                  </div>
+                );
+              })() : null}
               <div
                 className="seg-control"
                 role="tablist"
@@ -3457,20 +3613,14 @@ export function SettingsDialog({
                           const active = cfg.agentId === a.id;
                           const running =
                             active && agentTestState.status === 'running';
-                          const isAmrAgent = a.id === 'amr';
                           const description = AGENT_SHORT_DESCRIPTIONS[a.id];
                           const agentName = displayAgentName(a);
                           const diagnosticHandlers = diagnosticHandlersForAgent(a);
                           const modelSummary = agentModelSummary(a);
-                          const amrBenefits = [
-                            t('settings.amrBenefitOfficial'),
-                            t('settings.amrBenefitLowerPrice'),
-                            t('settings.amrBenefitManyModels'),
-                          ];
-                          const versionLabel =
-                            isAmrAgent
-                              ? ''
-                              : cleanAgentVersionLabel(a.name, a.version);
+                          const versionLabel = cleanAgentVersionLabel(
+                            a.name,
+                            a.version,
+                          );
                           const metaLabel =
                             a.authStatus === 'missing'
                               ? t('settings.agentAuthRequired')
@@ -3478,47 +3628,20 @@ export function SettingsDialog({
                                 ? t('settings.agentAuthUnknown')
                                 : versionLabel
                                   ? versionLabel
-                                  : a.id === 'amr'
-                                    ? ''
-                                    : t('common.installed');
+                                  : t('common.installed');
                           const metaTitle =
                             a.authStatus === 'missing' ||
                             a.authStatus === 'unknown'
                               ? (a.authMessage ?? a.path ?? '')
                               : (a.path ?? '');
-                          const amrHighlighted = isAmrAgent && amrHighlightActive;
-                          const amrCardEmail =
-                            isAmrAgent && active && amrCardStatus?.loggedIn
-                              ? amrCardStatus.user?.email || t('settings.amrSignedIn')
-                              : '';
-                          const amrCardProfileBadge =
-                            isAmrAgent && active && amrCardStatus?.loggedIn
-                              ? amrProfileBadgeLabel(amrCardStatus.profile)
-                              : null;
-                          const amrRevealPendingCancelAction =
-                            isAmrAgent &&
-                            active &&
-                            hoveredAgentCardId === a.id &&
-                            amrCardStatus?.loggedIn !== true &&
-                            amrCardStatus?.loginInFlight === true;
                           const cardEl = (
                             <div
                               key={a.id}
-                              ref={isAmrAgent ? amrCardRef : undefined}
                               data-testid={`settings-agent-card-${a.id}`}
                               className={
                                 'agent-card agent-card-installed' +
-                                (active ? ' active' : '') +
-                                (amrHighlighted ? ' agent-card--amr-highlight' : '')
+                                (active ? ' active' : '')
                               }
-                              onMouseEnter={() => {
-                                if (!isAmrAgent || !active) return;
-                                setHoveredAgentCardId(a.id);
-                              }}
-                              onMouseLeave={() => {
-                                if (hoveredAgentCardId !== a.id) return;
-                                setHoveredAgentCardId(null);
-                              }}
                             >
                               <div className="agent-card-main">
                                 <button
@@ -3533,41 +3656,17 @@ export function SettingsDialog({
                                       cli_provider_id: agentIdToTracking(a.id),
                                       install_status: 'installed',
                                     });
-                                    if (isAmrAgent) {
-                                      recordAmrEntry(analytics.track, 'settings_amr_agent_card');
-                                    }
                                     setCfg((c) => ({ ...c, agentId: a.id }));
                                   }}
                                   aria-pressed={active}
                                   >
                                     <AgentIcon id={a.id} size={32} />
                                     <div className="agent-card-body">
-                                      <div
-                                        className={
-                                          'agent-card-name' +
-                                          (isAmrAgent
-                                            ? ' agent-card-name--amr'
-                                            : '')
-                                        }
-                                      >
+                                      <div className="agent-card-name">
                                         <span className="agent-card-title">
                                           {agentName}
                                         </span>
-                                        {isAmrAgent ? (
-                                          <span
-                                            className="agent-card-benefits"
-                                            aria-hidden="true"
-                                          >
-                                            {amrBenefits.map((benefit) => (
-                                              <span
-                                                key={benefit}
-                                                className="agent-card-benefit"
-                                              >
-                                                {benefit}
-                                              </span>
-                                            ))}
-                                          </span>
-                                        ) : description ? (
+                                        {description ? (
                                           <>
                                             <span
                                               className="agent-card-name-divider"
@@ -3588,18 +3687,6 @@ export function SettingsDialog({
                                           </span>
                                         </div>
                                       ) : null}
-                                      {amrCardEmail ? (
-                                        <div className="agent-card-amr-email">
-                                          <span className="agent-card-amr-email-text" title={amrCardEmail}>
-                                            {amrCardEmail}
-                                          </span>
-                                          {amrCardProfileBadge ? (
-                                            <span className="agent-card-amr-profile-badge">
-                                              {amrCardProfileBadge}
-                                            </span>
-                                          ) : null}
-                                        </div>
-                                      ) : null}
                                       {!active && modelSummary ? (
                                         <div className="agent-card-model-summary">
                                           <span>{t('settings.modelPicker')}</span>
@@ -3608,55 +3695,7 @@ export function SettingsDialog({
                                       ) : null}
                                   </div>
                                 </button>
-                                {isAmrAgent ? (
-                                  active && amrCardStatusReady ? (
-                                    <span
-                                      className="amr-auth-anchor"
-                                      onMouseEnter={() => setAmrCoachmarkDismissed(true)}
-                                    >
-                                      {amrCoachmarkArmed &&
-                                      amrCardStatus?.loggedIn === false &&
-                                      !amrCoachmarkDismissed ? (
-                                        <span className="amr-coachmark" aria-hidden="true">
-                                          <span className="amr-coachmark__ring" />
-                                          <svg
-                                            className="amr-coachmark__cursor"
-                                            width="22"
-                                            height="22"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                          >
-                                            <path
-                                              d="M9.4 13V8a1.8 1.8 0 0 1 3.6 0v4.6c.35-.55 1-.95 1.75-.95.65 0 1.25.32 1.6.85.32-.5.9-.8 1.55-.8.8 0 1.5.5 1.78 1.2.35-.3.8-.5 1.3-.5 1.1 0 2 .9 2 2v3.05a5.6 5.6 0 0 1-5.6 5.6h-2.5a5 5 0 0 1-3.75-1.7l-4.2-4.75a1.85 1.85 0 0 1 2.65-2.6L9.4 16Z"
-                                              fill="#fff"
-                                              stroke="#1a1a1a"
-                                              strokeWidth="1.1"
-                                              strokeLinejoin="round"
-                                            />
-                                          </svg>
-                                        </span>
-                                      ) : null}
-                                      <AmrLoginPill
-                                        className="agent-card-amr-auth"
-                                        hideSignedOutStatus
-                                        hideSignedInStatus
-                                        initialStatus={amrCardStatus}
-                                        skipInitialRefresh
-                                        signInLabel={t('settings.amrAuthorize')}
-                                        showConsoleAction={amrCardStatus?.loggedIn === true}
-                                        amrEntrySourceDetail="settings_amr_authorize"
-                                        revealPendingCancelAction={amrRevealPendingCancelAction}
-                                        onStatusChange={setAmrCardStatus}
-                                      />
-                                    </span>
-                                  ) : (
-                                    <div
-                                      className="agent-card-amr-auth agent-card-amr-auth--placeholder"
-                                      aria-hidden="true"
-                                    />
-                                  )
-                                ) : null}
-                                {active && !isAmrAgent ? (
+                                {active ? (
                                   <button
                                     type="button"
                                     className={
@@ -3726,9 +3765,9 @@ export function SettingsDialog({
                                     </p>
                                     {!agentTestState.result.ok ? (
                                       <div className="settings-test-actions">
-                                        {amrRescueAvailable && !isAmrAgent ? (
+                                        {amrRescueAvailable ? (
                                           <span className="settings-test-actions-hint">
-                                            {t('settings.amrRescueHint')}
+                                            {t('settings.amrRescueSeeAbove')}
                                           </span>
                                         ) : null}
                                         <div className="settings-test-actions-row">
@@ -3740,10 +3779,10 @@ export function SettingsDialog({
                                             <Icon name="reload" size={13} />
                                             <span>{t('settings.testRetry')}</span>
                                           </button>
-                                          {amrRescueAvailable && !isAmrAgent ? (
+                                          {amrRescueAvailable ? (
                                             <button
                                               type="button"
-                                              className="ghost icon-btn settings-test-btn"
+                                              className="settings-test-btn"
                                               onClick={handleUseAmrRescue}
                                             >
                                               {t('settings.amrRescueCta')}
@@ -4113,12 +4152,12 @@ export function SettingsDialog({
               !providerTestState.result.ok ? (
                 <div className="settings-test-actions settings-byok-amr-rescue">
                   <span className="settings-test-actions-hint">
-                    {t('settings.amrRescueHint')}
+                    {t('settings.amrRescueSeeAbove')}
                   </span>
                   <div className="settings-test-actions-row">
                     <button
                       type="button"
-                      className="ghost icon-btn settings-test-btn"
+                      className="settings-test-btn"
                       onClick={handleUseAmrRescue}
                     >
                       {t('settings.amrRescueCta')}

@@ -1991,10 +1991,14 @@ export interface Dict {
   'chat.amrPreflight.useAmrNowCta': string;
   'chat.amrPreflight.configureCta': string;
   'chat.amrPreflight.closeAria': string;
+  'chat.amrPreflight.recommend': string;
+  'chat.amrPreflight.chipNoConfig': string;
+  'chat.amrPreflight.chipOfficialAgents': string;
+  'chat.amrPreflight.chipPayAsYouGo': string;
   'chat.amrPreflight.meta': string;
   'chat.amrPreflight.signInUseAmrCta': string;
   'chat.amrPreflight.pendingNotice': string;
-  'settings.amrRescueHint': string;
+  'settings.amrRescueSeeAbove': string;
   'settings.amrRescueCta': string;
   'chat.amrError.authMessage': string;
   'chat.amrError.balanceMessage': string;

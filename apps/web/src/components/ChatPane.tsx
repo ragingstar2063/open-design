@@ -2348,6 +2348,22 @@ function AmrPreflightDialog({
           </button>
         </header>
         <p className="amr-preflight-body">{t('chat.amrPreflight.body')}</p>
+        <div className="amr-preflight-recommend">
+          <span className="amr-preflight-recommend__label">
+            {t('chat.amrPreflight.recommend')}
+          </span>
+          <span className="amr-preflight-benefits">
+            {[
+              t('chat.amrPreflight.chipNoConfig'),
+              t('chat.amrPreflight.chipOfficialAgents'),
+              t('chat.amrPreflight.chipPayAsYouGo'),
+            ].map((benefit) => (
+              <span key={benefit} className="amr-preflight-benefit">
+                {benefit}
+              </span>
+            ))}
+          </span>
+        </div>
         <p className="amr-preflight-meta">{t('chat.amrPreflight.meta')}</p>
         <div className="amr-preflight-actions">
           <button
