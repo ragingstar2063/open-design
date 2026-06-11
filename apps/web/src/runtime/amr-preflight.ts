@@ -21,6 +21,30 @@ export interface ResolveAmrSendPreflightOptions {
   agentsLoading?: boolean;
 }
 
+const BUILT_IN_DAEMON_AGENT_IDS = new Set([
+  'aider',
+  'antigravity',
+  'claude',
+  'codex',
+  'copilot',
+  'cursor-agent',
+  'deepseek',
+  'devin',
+  'gemini',
+  'grok-build',
+  'hermes',
+  'kilo',
+  'kimi',
+  'kiro',
+  'opencode',
+  'pi',
+  'qoder',
+  'qwen',
+  'reasonix',
+  'trae-cli',
+  'vibe',
+]);
+
 export function resolveAmrSendPreflightIssue(
   config: AppConfig | undefined,
   agents: readonly AgentInfo[] | undefined,
@@ -48,10 +72,9 @@ export function resolveAmrSendPreflightIssue(
   const selectedAgent = agents?.find((agent) => agent.id === agentId);
   if (!selectedAgent) {
     if (options.agentsLoading) return null;
-    // The daemon registry emits known local CLIs even when they are not
-    // installed, with availability diagnostics attached. If an id is absent
-    // entirely, the client likely has incomplete probe data or a test/custom
-    // agent id, so let the existing run path own the outcome.
+    if (BUILT_IN_DAEMON_AGENT_IDS.has(agentId)) {
+      return { kind: 'agent-unavailable', agentId };
+    }
     return null;
   }
 

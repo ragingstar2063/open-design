@@ -817,7 +817,7 @@ Expected output:
         onSelectConversation={vi.fn()}
         onDeleteConversation={vi.fn()}
         projectMetadata={projectMetadata}
-        config={localCliConfig}
+        config={customLocalCliConfig}
         agents={[]}
         agentsLoading={false}
         onOpenSettings={vi.fn()}
@@ -1172,6 +1172,11 @@ const localCliConfig: AppConfig = {
   agentId: 'claude',
   skillId: null,
   designSystemId: null,
+};
+
+const customLocalCliConfig: AppConfig = {
+  ...localCliConfig,
+  agentId: 'mock-agent',
 };
 
 const unavailableClaudeAgent: AgentInfo = {
