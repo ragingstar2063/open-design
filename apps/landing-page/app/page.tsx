@@ -24,9 +24,10 @@ import {
   type LandingLocaleCode,
 } from './i18n';
 import {
-  heroImage,
-  heroImageSrcset,
-  imageAsset,
+  heroBgImage,
+  heroBgSrcset,
+  heroProductImage,
+  heroProductSrcset,
   PRECISE_LAZY_PLACEHOLDER,
 } from './image-assets';
 import { getHomeExtra } from './home-translations';
@@ -396,8 +397,8 @@ export default function Page({
               the headline/CTAs sit on top via the grid's higher stacking. */}
           <img
             className='hero-bg'
-            src={heroImage}
-            srcSet={heroImageSrcset}
+            src={heroBgImage}
+            srcSet={heroBgSrcset}
             sizes='100vw'
             width={2880}
             height={2608}
@@ -447,7 +448,9 @@ export default function Page({
               </p>
               <div className='hero-shot' data-reveal>
                 <img
-                  src='/hero-product.webp?v=3'
+                  src={heroProductImage}
+                  srcSet={heroProductSrcset}
+                  sizes='(max-width: 768px) 100vw, 60vw'
                   width={2508}
                   height={1450}
                   alt='Open Design desktop — design files & index.html preview'

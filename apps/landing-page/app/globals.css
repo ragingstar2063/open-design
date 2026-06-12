@@ -19,7 +19,12 @@
  */
 @font-face {
   font-family: 'Albert Sans';
-  src: url('/skill-assets/AlbertSans-VariableFont_wght.ttf') format('truetype');
+  /* woff2 first (≈50KB, all modern browsers); the variable .ttf (≈125KB)
+     stays as a fallback for ancient engines only. font-display:swap so text
+     paints immediately in the fallback face and never blocks render. */
+  src:
+    url('/skill-assets/AlbertSans-VariableFont_wght.woff2') format('woff2'),
+    url('/skill-assets/AlbertSans-VariableFont_wght.ttf') format('truetype');
   font-weight: 100 900;
   font-style: normal;
   font-display: swap;
@@ -27,7 +32,9 @@
 
 @font-face {
   font-family: 'Albert Sans';
-  src: url('/skill-assets/AlbertSans-Italic-VariableFont_wght.ttf') format('truetype');
+  src:
+    url('/skill-assets/AlbertSans-Italic-VariableFont_wght.woff2') format('woff2'),
+    url('/skill-assets/AlbertSans-Italic-VariableFont_wght.ttf') format('truetype');
   font-weight: 100 900;
   font-style: italic;
   font-display: swap;
@@ -35,10 +42,15 @@
 
 @font-face {
   font-family: 'Remix Icon';
-  src: url('/skill-assets/remixicon.ttf') format('truetype');
+  /* Subset to the 11 glyphs the site actually renders: 598KB .ttf → ≈1.3KB
+     woff2. font-display:swap (was `block`, which hid the icons — and any text
+     in the same paint — until the font downloaded). */
+  src:
+    url('/skill-assets/remixicon.subset.woff2') format('woff2'),
+    url('/skill-assets/remixicon.ttf') format('truetype');
   font-weight: 400;
   font-style: normal;
-  font-display: block;
+  font-display: swap;
 }
 
 :root {

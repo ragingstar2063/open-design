@@ -10,7 +10,11 @@ import GoogleAnalytics from '../_components/google-analytics.astro';
 import ResourceHints from '../_components/resource-hints.astro';
 import LocaleSwitcherScript from '../_components/locale-switcher-script.astro';
 import PreciseLazyload from '../_components/precise-lazyload.astro';
-import { heroImage, heroImageSrcset } from '../image-assets';
+import {
+  heroBgImage,
+  heroBgSrcset,
+  heroImage,
+} from '../image-assets';
 import {
   LANDING_LOCALES,
   alternateLinksForPath,
@@ -167,9 +171,9 @@ const matterRuntime = readFileSync(
     <link
       rel="preload"
       as="image"
-      href={heroImage}
-      imagesrcset={heroImageSrcset}
-      imagesizes="(max-width: 768px) 100vw, 60vw"
+      href={heroBgImage}
+      imagesrcset={heroBgSrcset}
+      imagesizes="100vw"
       fetchpriority="high"
     />
 
