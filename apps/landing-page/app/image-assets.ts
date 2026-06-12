@@ -41,7 +41,7 @@ export function imageAssetSrcset(
 // crawlers (Facebook, Twitter, LinkedIn, …) have spotty WebP support, so the
 // share card must stay a PNG.
 export const heroImage = '/hero-home.png?v=2';
-export const labStageImage = '/lab-stage-bg.jpg';
+export const labStageImage = '/lab-stage-bg.webp';
 
 // The visible full-bleed hero backdrop renders from responsive WebP variants
 // instead — the source 2880px PNG was a 326KB single file served to every
