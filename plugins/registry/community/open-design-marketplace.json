@@ -138,61 +138,6 @@
       "description": "Publication-grade single-file HTML decks from the slides workflow of 花叔's huashu-design skill: editorial masthead/kicker/serif-display grammar on a fixed 1920×1080 auto-fit canvas, one terracotta accent, light/dark rhythm, keyboard + hash navigation, anti-AI-slop rules, and an optional editable-PPTX path."
     },
     {
-      "name": "community/html-ppt-studio",
-      "title": "HTML PPT Studio",
-      "version": "1.0.0",
-      "source": "github:nexu-io/open-design@main/plugins/community/html-ppt-studio",
-      "publisher": {
-        "id": "lewislulu",
-        "github": "lewislulu",
-        "url": "https://github.com/lewislulu"
-      },
-      "homepage": "https://github.com/lewislulu/html-ppt-skill",
-      "license": "MIT",
-      "capabilitiesSummary": [
-        "prompt:inject",
-        "fs:write"
-      ],
-      "tags": [
-        "community",
-        "deck",
-        "slides",
-        "ppt",
-        "presentation",
-        "themes",
-        "design-tokens"
-      ],
-      "description": "Token-driven HTML deck studio — 36 themes × 31 layouts × 27 animations from lewislulu/html-ppt-skill in a single-file seed. One token sheet drives every skin: press T to restyle the whole deck, arrows to navigate, #/N hash deep links."
-    },
-    {
-      "name": "community/fs-bold-signal",
-      "title": "Bold Signal",
-      "version": "1.0.0",
-      "source": "github:nexu-io/open-design@main/plugins/community/fs-bold-signal",
-      "publisher": {
-        "id": "zarazhangrui",
-        "github": "zarazhangrui",
-        "url": "https://github.com/zarazhangrui"
-      },
-      "homepage": "https://github.com/zarazhangrui/frontend-slides",
-      "license": "MIT",
-      "capabilitiesSummary": [
-        "prompt:inject",
-        "fs:write"
-      ],
-      "tags": [
-        "community",
-        "deck",
-        "slides",
-        "presentation",
-        "dark",
-        "bold",
-        "orange",
-        "web"
-      ],
-      "description": "High-impact dark deck theme: a vibrant #FF5722 orange card floats on a #1a1a1a charcoal gradient, with giant 01/02 section numbers top-left, breadcrumb navigation top-right, grid-precise alignment, and Archivo Black display type over Space Grotesk body. Single-file HTML on a fixed 1920x1080 stage that scales to any viewport. Based on zarazhangrui/frontend-slides bold-signal (STYLE_PRESETS section 1)."
-    },
-    {
       "name": "community/fs-creative-voltage",
       "title": "Creative Voltage",
       "version": "1.0.0",
@@ -394,36 +339,6 @@
         "light"
       ],
       "description": "LaTeX-paper deck theme: paper-white #fdfcf8 ground, all-serif type (Latin Modern Roman with Playfair Display fallback), ink-black body, link-blue #1a3a7a underlined citation anchors, italic kickers, zero radius and near-zero shadow, double-rule title page, numbered Figure/Table captions and booktabs three-line tables. Single-file HTML deck with keyboard navigation and hash deep links — for conference talks, thesis defenses, research reviews and journal clubs. Based on lewislulu/html-ppt-skill academic-paper."
-    },
-    {
-      "name": "community/hps-aurora-glass",
-      "title": "Aurora Glass",
-      "version": "1.0.0",
-      "source": "github:nexu-io/open-design@main/plugins/community/hps-aurora-glass",
-      "publisher": {
-        "id": "lewislulu",
-        "github": "lewislulu",
-        "url": "https://github.com/lewislulu"
-      },
-      "homepage": "https://github.com/lewislulu/html-ppt-skill",
-      "license": "MIT",
-      "capabilitiesSummary": [
-        "prompt:inject",
-        "fs:write"
-      ],
-      "tags": [
-        "community",
-        "deck",
-        "slides",
-        "ppt",
-        "presentation",
-        "aurora",
-        "glassmorphism",
-        "dark",
-        "gradient",
-        "html-ppt"
-      ],
-      "description": "Dark glassmorphic deck theme: near-black indigo #06091c pages under a triple mint/periwinkle/violet aurora radial glow, frosted-glass cards (blur(24px) saturate(160%)), mint→blue→violet gradient titles and hero numbers, 20px radii, pure CSS/SVG charts, keyboard-first single-file HTML. Based on https://github.com/lewislulu/html-ppt-skill aurora theme, locked as a single-skin deck plugin. Use for keynotes, pitch decks, tech sharing, or product launches that want a premium night-sky feel."
     },
     {
       "name": "community/hps-bauhaus",
@@ -932,35 +847,6 @@
         "web"
       ],
       "description": "Developer-native dark deck theme: near-black #0a0e14 ground, Geist Mono everywhere with large weight-400 titles (never bold display), Dracula-green #50fa7b accent, faint dot-grid texture, and low-opacity green hairlines. Zero skeuomorphism, zero effects - pure typographic discipline. Scroll-snap single-file HTML with SlideEngine navigation, hash routing, and automatic light mode (#f4f6f8 / #0d7a3e) via prefers-color-scheme. Based on nicobailon/visual-explainer terminal-mono."
-    },
-    {
-      "name": "community/ve-warm-signal",
-      "title": "Warm Signal",
-      "version": "1.0.0",
-      "source": "github:nexu-io/open-design@main/plugins/community/ve-warm-signal",
-      "publisher": {
-        "id": "nicobailon",
-        "github": "nicobailon",
-        "url": "https://github.com/nicobailon"
-      },
-      "homepage": "https://github.com/nicobailon/visual-explainer",
-      "license": "MIT",
-      "capabilitiesSummary": [
-        "prompt:inject",
-        "fs:write"
-      ],
-      "tags": [
-        "community",
-        "deck",
-        "slides",
-        "presentation",
-        "warm",
-        "terracotta",
-        "cream",
-        "dual-theme",
-        "web"
-      ],
-      "description": "Cream-paper deck theme with terracotta accents: #faf6f0 paper, #c2410c terracotta / coral accent, Plus Jakarta Sans rounded-modern sans + Azeret Mono labels, warm radial glow bottom-left, ultra-light coral giant section numbers, terracotta-edged cards, and a built-in warm-charcoal #1c1916 dark theme with a light/dark toggle. Scroll-snap single-file HTML deck with pure CSS/SVG diagrams and zero external JS. Based on nicobailon/visual-explainer warm-signal (slide-patterns.md Warm Signal preset on the slide-deck.html base)."
     }
   ]
 }

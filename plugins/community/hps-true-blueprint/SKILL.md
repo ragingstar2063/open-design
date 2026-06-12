@@ -127,8 +127,9 @@ use them in eyebrows and ticks only, never as fills.
   (srcdoc-safe); dual window/document capture-phase key listeners deduped by
   Event identity; scroll sync; resize re-snap; body auto-focus. These solve
   real iframe-host bugs — do not "simplify" them away.
-- **No theme cycling.** Unlike the html-ppt-studio root plugin, there is no
-  `T` key and no `themes` array — the skin is locked.
+- **No theme cycling.** Unlike the upstream html-ppt-studio system this
+  family is ported from, there is no `T` key and no `themes` array — the
+  skin is locked.
 - Animations: only the inlined subset — `.anim-rise-in`, `.anim-fade-up`,
   `.anim-stagger-list`. At most one hero animation plus one stagger per slide.
 - Speaker notes: one hidden `<div class="notes">…</div>` per slide, 1–3
