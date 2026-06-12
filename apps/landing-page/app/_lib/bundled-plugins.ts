@@ -83,12 +83,24 @@ function bakedPreviews(): Map<
   if (file) {
     try {
       const raw = JSON.parse(readFileSync(file, 'utf8')) as {
-        previews?: Record<string, { video?: unknown; poster?: unknown; holdMs?: unknown }>;
+        previews?: Record<
+          string,
+          { video?: unknown; poster?: unknown; holdMs?: unknown; durationMs?: unknown }
+        >;
       };
       for (const [id, entry] of Object.entries(raw.previews ?? {})) {
         const video = typeof entry?.video === 'string' ? entry.video : null;
         const poster = typeof entry?.poster === 'string' ? entry.poster : null;
-        const holdMs = typeof entry?.holdMs === 'number' ? entry.holdMs : null;
+        const rawHold = typeof entry?.holdMs === 'number' ? entry.holdMs : null;
+        const durationMs = typeof entry?.durationMs === 'number' ? entry.durationMs : null;
+        // Only treat the clip as a hold/pan split when there is a real pan
+        // segment after the hold — i.e. the clip runs LONGER than the hold.
+        // Some baked clips are shorter than the 2.5s hold (no pan); flagging
+        // those as hold/pan would make the hover seek past the end and stall.
+        const holdMs =
+          rawHold != null && rawHold > 0 && durationMs != null && durationMs > rawHold
+            ? rawHold
+            : null;
         if (video && poster) {
           map.set(id, {
             video: `${PLUGIN_PREVIEWS_BASE_URL}/${video}`,
