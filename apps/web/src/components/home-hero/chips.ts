@@ -139,10 +139,10 @@ export const HOME_HERO_CHIPS: ReadonlyArray<HomeHeroChip> = [
         fidelity: 'high-fidelity',
       },
       inputs: {
-        sourceText: 'the user brief',
+        sourceText: "the user's brief",
         diagramType: 'auto',
         visualStyle: 'commercial editorial',
-        brandDirection: 'the active project design system',
+        designSystem: 'the active project design system',
         outputVariant: 'minimal light',
       },
     },

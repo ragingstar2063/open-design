@@ -54,8 +54,8 @@
     },
     "useCase": {
       "query": {
-        "en": "Turn {{sourceText}} into a {{visualStyle}} diagram. Select the best diagram grammar when {{diagramType}} is auto, use {{brandDirection}} for visual direction, and output a single self-contained HTML file with inline SVG using the {{outputVariant}} variant.",
-        "zh-CN": "把 {{sourceText}} 转成 {{visualStyle}} 图解。若 {{diagramType}} 为 auto，请自动选择最合适的图解语法；视觉方向使用 {{brandDirection}}；用 {{outputVariant}} 变体输出一个内联 SVG 的单文件 HTML。"
+        "en": "Turn {{sourceText}} into a {{visualStyle}} diagram. Select the best diagram grammar when {{diagramType}} is auto, use {{designSystem}} for visual direction, and output a single self-contained HTML file with inline SVG using the {{outputVariant}} variant.",
+        "zh-CN": "把 {{sourceText}} 转成 {{visualStyle}} 图解。若 {{diagramType}} 为 auto，请自动选择最合适的图解语法；视觉方向使用 {{designSystem}}；用 {{outputVariant}} 变体输出一个内联 SVG 的单文件 HTML。"
       },
       "exampleOutputs": [
         {
@@ -110,8 +110,8 @@
         "default": "commercial editorial"
       },
       {
-        "name": "brandDirection",
-        "label": "Brand direction",
+        "name": "designSystem",
+        "label": "Design system",
         "type": "string",
         "placeholder": "the active project design system, Linear-like, editorial monochrome",
         "default": "the active project design system"

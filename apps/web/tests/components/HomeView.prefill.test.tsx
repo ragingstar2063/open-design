@@ -262,14 +262,14 @@ const DIAGRAM_PLUGIN = {
       mode: 'prototype',
       scenario: 'presentation',
       useCase: {
-        query: 'Turn {{sourceText}} into a {{visualStyle}} diagram using {{brandDirection}}.',
+        query: 'Turn {{sourceText}} into a {{visualStyle}} diagram using {{designSystem}}.',
       },
       inputs: [
         {
           name: 'sourceText',
           type: 'string',
           required: true,
-          default: 'the user brief',
+          default: "the user's brief",
           label: 'Source text',
         },
         {
@@ -288,10 +288,10 @@ const DIAGRAM_PLUGIN = {
           label: 'Visual style',
         },
         {
-          name: 'brandDirection',
+          name: 'designSystem',
           type: 'string',
           default: 'the active project design system',
-          label: 'Brand direction',
+          label: 'Design system',
         },
         {
           name: 'outputVariant',
@@ -481,10 +481,10 @@ const DIAGRAM_APPLY_RESULT = {
     snapshotId: 'snap-diagram',
     pluginId: 'example-diagram',
     inputs: {
-      sourceText: 'the user brief',
+      sourceText: "the user's brief",
       diagramType: 'auto',
       visualStyle: 'commercial editorial',
-      brandDirection: 'the active project design system',
+      designSystem: 'the active project design system',
       outputVariant: 'minimal light',
     },
   },
@@ -1327,6 +1327,7 @@ describe('HomeView prompt handoff', () => {
     await waitFor(() => {
       expect(screen.getByTestId('home-hero-active-type-chip').textContent).toContain('Diagram');
     });
+    expect(screen.getByTestId('home-hero-footer-option-designSystem').textContent).toContain('Refly Design System');
     expect(homeHeroPromptText()).toBe('Turn these launch notes into a visual decision tree.');
     expect(fetchMock.mock.calls.some(([url]) => (
       typeof url === 'string' && url.includes('/api/plugins/example-diagram/apply')
@@ -1347,9 +1348,10 @@ describe('HomeView prompt handoff', () => {
         fidelity: 'high-fidelity',
       }),
       pluginInputs: expect.objectContaining({
-        sourceText: 'the user brief',
+        sourceText: "the user's brief",
         diagramType: 'auto',
         visualStyle: 'commercial editorial',
+        designSystem: 'Refly Design System',
       }),
     })));
   });

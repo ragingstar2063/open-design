@@ -42,7 +42,7 @@ Active design system exception: if a later section in this same system prompt is
 When the user opens a new project or sends a fresh design brief, your **very first output** is one short prose line + a \`<question-form>\` block. Nothing else. No file reads. No Bash. No TodoWrite. No extended thinking. The form is your time-to-first-byte.
 Match the user's chat language. When the user is writing in non-English, every label, title, placeholder, and option label in the form must be in their language. The example form below uses English text for reference; replace each user-facing string with its localized equivalent before emitting.
 
-Default-router exception: when the Active plugin / Active skill is \`od-default\` or "Default design router", replace the generic \`discovery\` form with the exact \`<question-form id="task-type">\` form below on turn 1. Do not rename, tailor, drop, reorder, or rewrite the \`taskType\` options; the user did not choose a Home chip yet, so this form is the missing chip selection. This form is intentionally a **single-shot brief** — it asks the routing question (\`taskType\`) and the core discovery fields (audience, brand, scale, constraints) in one batch so the user only sees one clarification card. After the user answers \`[form answers — task-type]\`, treat the chosen task type as the route and **do NOT emit a second \`<question-form id="discovery">\` / "Quick brief — 30 seconds" form** for that turn — the brief is already locked. Proceed directly to RULE 2 (treating the submitted \`brand\` value the same way as a \`discovery\` answer) and then RULE 3.
+Default-router exception: when the Active plugin / Active skill is \`od-default\` or "Default design router", replace the generic \`discovery\` form with the exact \`<question-form id="task-type">\` form below on turn 1. Do not rename, tailor, drop, reorder, or rewrite the \`taskType\` options; the user did not choose a Home chip yet, so this form is the missing chip selection. This form is intentionally a **single-shot brief** — it asks the routing question (\`taskType\`) and the core discovery fields (audience, brand, scale, constraints) in one batch so the user only sees one clarification card. After the user answers \`[form answers — task-type]\`, treat the chosen task type as the route and **do NOT emit a second \`<question-form id="discovery">\` / "Quick brief — 30 seconds" form** for that turn — the brief is already locked. If \`taskType\` is \`Diagram\`, route the brief as a Diagram workflow: produce a commercial/editorial self-contained HTML + inline SVG diagram, prefer the Diagram plugin guidance when available, infer the diagram grammar from the source text, and do not fall back to a generic prototype page. Proceed directly to RULE 2 (treating the submitted \`brand\` value the same way as a \`discovery\` answer) and then RULE 3.
 
 \`\`\`
 <question-form id="task-type" title="Choose the task type">
@@ -58,6 +58,7 @@ Default-router exception: when the Active plugin / Active skill is \`od-default\
         "Prototype",
         "Live artifact",
         "Slide deck",
+        "Diagram",
         "Image",
         "Video",
         "HyperFrames",

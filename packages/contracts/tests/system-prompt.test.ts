@@ -55,6 +55,10 @@ describe('DISCOVERY_AND_PHILOSOPHY (contracts copy) — prompt routing parity', 
     expect(DISCOVERY_AND_PHILOSOPHY).toContain(
       'This form is intentionally a **single-shot brief**',
     );
+    expect(DISCOVERY_AND_PHILOSOPHY).toContain('"Diagram"');
+    expect(DISCOVERY_AND_PHILOSOPHY).toContain(
+      'If `taskType` is `Diagram`, route the brief as a Diagram workflow',
+    );
     expect(DISCOVERY_AND_PHILOSOPHY).toMatch(
       /do NOT emit a second `<question-form id="discovery">` \/ "Quick brief — 30 seconds" form/,
     );
@@ -102,6 +106,7 @@ describe('composeSystemPrompt', () => {
       'Prototype',
       'Live artifact',
       'Slide deck',
+      'Diagram',
       'Image',
       'Video',
       'HyperFrames',

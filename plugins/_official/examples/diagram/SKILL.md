@@ -15,12 +15,13 @@ This skill adapts the MIT-licensed `diagram-design` approach by Cathryn Lavery t
 ## Workflow
 
 1. Read the Project metadata and Plugin inputs. `sourceText` is the source material; if it only says "the user's brief", use the user's submitted prompt.
-2. Choose a diagram type. If `diagramType` is `auto`, infer the visual grammar from the content before asking.
-3. Ask at most one narrow question only when the same source text genuinely fits multiple incompatible grammars and the wrong choice would change the artifact.
-4. Load the matching `references/type-*.md` file before drawing. For information-graphic layouts that are not a strict systems diagram, also load `references/infographic-patterns.md`. For optional editorial callouts, also load `references/primitive-annotation.md`; for an intentionally hand-drawn variant, load `references/primitive-sketchy.md`.
-5. Start from the closest template in `assets/`: `template.html`, `template-dark.html`, or `template-full.html`.
-6. Write one HTML file into the project artifact workspace. Use inline SVG for the diagram and embedded CSS for all styling.
-7. Run the quality gate below before finalizing.
+2. Treat `designSystem` as the visual direction. If it is "the active project design system", use the active DESIGN.md; if it is a named system or free-form direction, map it to palette, type, spacing, and tone.
+3. Choose a diagram type. If `diagramType` is `auto`, infer the visual grammar from the content before asking.
+4. Ask at most one narrow question only when the same source text genuinely fits multiple incompatible grammars and the wrong choice would change the artifact.
+5. Load the matching `references/type-*.md` file before drawing. For information-graphic layouts that are not a strict systems diagram, also load `references/infographic-patterns.md`. For optional editorial callouts, also load `references/primitive-annotation.md`; for an intentionally hand-drawn variant, load `references/primitive-sketchy.md`.
+6. Start from the closest template in `assets/`: `template.html`, `template-dark.html`, or `template-full.html`.
+7. Write one HTML file into the project artifact workspace. Use inline SVG for the diagram and embedded CSS for all styling.
+8. Run the quality gate below before finalizing.
 
 ## Diagram Selection
 

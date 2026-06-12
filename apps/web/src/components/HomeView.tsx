@@ -1913,7 +1913,7 @@ function stripArtifactFooterInputs(
 }
 
 function footerInputNamesForChip(chipId: string | null): string[] {
-  if (chipId === 'prototype' || chipId === 'deck') return ['designSystem'];
+  if (chipId === 'prototype' || chipId === 'deck' || chipId === 'diagram') return ['designSystem'];
   if (chipId === 'image' || chipId === 'video') return ['designSystem'];
   // hyperframes / audio surface no pre-flight settings — the agent asks for
   // ratio / duration / model / audio kind via question-form during the run.
