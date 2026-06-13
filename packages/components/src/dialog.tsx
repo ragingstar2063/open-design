@@ -10,6 +10,7 @@ export interface DialogProps {
   onClose?: () => void;
   className?: string;
   backdropClassName?: string;
+  includeChromeClassName?: boolean;
   id?: string;
   role?: 'dialog' | 'alertdialog';
   ariaLabel?: string;
@@ -27,6 +28,7 @@ export function Dialog({
   onClose,
   className,
   backdropClassName,
+  includeChromeClassName = true,
   id,
   role = 'dialog',
   ariaLabel,
@@ -53,7 +55,7 @@ export function Dialog({
 
   const sharedProps = {
     id,
-    className: joinClassNames(styles.dialog, 'modal', className),
+    className: joinClassNames(styles.dialog, includeChromeClassName ? 'modal' : undefined, className),
     onClick: (event: MouseEvent<HTMLElement>) => event.stopPropagation(),
     role,
     'aria-modal': 'true' as const,

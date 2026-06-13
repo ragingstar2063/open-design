@@ -81,6 +81,7 @@ export function PluginScenarioDetail({
     <Dialog
       backdropClassName="plugin-details-modal-backdrop"
       className="plugin-details-modal"
+      includeChromeClassName={false}
       ariaLabel={`${record.title} details`}
       onClose={onClose}
       closeOnEscape

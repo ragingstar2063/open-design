@@ -622,6 +622,7 @@ function PluginShareConfirmModal({
     <Dialog
       backdropClassName="plugin-details-modal-backdrop plugin-share-confirm"
       className="plugin-details-modal plugin-share-confirm__panel"
+      includeChromeClassName={false}
       ariaLabel={`${actionTitle} for ${sourceRecord.title}`}
       onClose={pending ? undefined : onClose}
       data-testid="plugin-share-confirm-modal"

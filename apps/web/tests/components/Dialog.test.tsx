@@ -44,4 +44,15 @@ describe('Dialog', () => {
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('lets custom panels opt out of the shared modal chrome class', () => {
+    const { container } = render(
+      <Dialog className="plugin-details-modal" includeChromeClassName={false}>
+        <h2>Plugin details</h2>
+      </Dialog>,
+    );
+
+    expect(container.querySelector('.plugin-details-modal')).toBeTruthy();
+    expect(container.querySelector('.plugin-details-modal')?.classList.contains('modal')).toBe(false);
+  });
 });
