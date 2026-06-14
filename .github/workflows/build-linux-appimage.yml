@@ -25,6 +25,7 @@ on:
 
 permissions:
   contents: write # create/update Releases on this repo
+  actions: write # dispatch pacman-repo (and aur-publish when enabled)
 
 concurrency:
   group: build-linux-${{ github.event.inputs.tag || github.event.client_payload.tag }}
