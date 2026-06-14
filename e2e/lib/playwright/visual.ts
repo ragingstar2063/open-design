@@ -175,6 +175,43 @@ export async function configureVisualPage(page: Page, options: VisualPageOptions
     await fulfillAgentsRoute(route, agents);
   });
 
+  await page.route('**/api/test/connection', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      json: {
+        ok: true,
+        kind: 'success',
+        latencyMs: 1,
+        model: config.model,
+        sample: 'Visual connection check.',
+      },
+    });
+  });
+
+  await page.route('**/api/provider/models', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.continue();
+      return;
+    }
+
+    await route.fulfill({
+      json: {
+        ok: true,
+        kind: 'success',
+        latencyMs: 1,
+        models: [
+          { id: 'gpt-4o', label: 'GPT-4o' },
+          { id: 'gpt-4o-mini', label: 'GPT-4o mini' },
+          { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+        ],
+      },
+    });
+  });
+
   await page.route('**/api/health', async (route) => {
     await fulfillGet(route, { ok: true });
   });
