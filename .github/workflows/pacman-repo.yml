@@ -54,7 +54,9 @@ jobs:
           install -d build && cp aur/open-design-bin/PKGBUILD build/
           chown -R builder:builder build
           # -bin package: only downloads + repackages the AppImage, no compile.
-          sudo -u builder bash -c 'cd build && makepkg -f --noconfirm --cleanbuild'
+          # --nodeps: runtime deps (gtk3/nss/...) are recorded for install time but
+          # need not be present in the clean build container.
+          sudo -u builder bash -c 'cd build && makepkg -f --noconfirm --cleanbuild --nodeps'
           ls -1 build/*.pkg.tar.zst
 
       - name: Assemble pacman repo database
