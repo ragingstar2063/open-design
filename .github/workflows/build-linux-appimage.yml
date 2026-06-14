@@ -1,0 +1,111 @@
+name: build-linux-appimage
+
+# Build an Open Design Linux AppImage from a given UPSTREAM tag and publish
+# it as a Release on THIS repo. The source is pulled from nexu-io/open-design
+# at the tag at build time, so this repo never has to merge upstream code —
+# it only carries the build glue (this workflow + the AUR PKGBUILD).
+#
+# Recipe mirrors upstream's own `build_linux` job, with two deliberate changes:
+#   * NO --containerized  — upstream's containerized bootstrap is broken and
+#     gated off; a native ubuntu-latest build targets glibc >= 2.39, which is
+#     fine for modern Arch / CachyOS (and is what the AUR package consumes).
+#   * publishes to GitHub Releases on this repo (upstream pushes to R2).
+# electron-builder rebuilds native modules (better-sqlite3, node-pty) against
+# Electron's ABI during packaging, so no manual native-build step is needed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build, e.g. open-design-v0.10.1"
+        required: true
+        type: string
+  repository_dispatch:
+    types: [upstream-release]
+
+permissions:
+  contents: write # create/update Releases on this repo
+
+concurrency:
+  group: build-linux-${{ github.event.inputs.tag || github.event.client_payload.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Resolve tag + version
+        id: v
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.tag || github.event.client_payload.tag }}"
+          [ -n "$TAG" ] || { echo "::error::no tag provided"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#open-design-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout UPSTREAM source at tag
+        uses: actions/checkout@v6
+        with:
+          repository: nexu-io/open-design
+          ref: ${{ steps.v.outputs.tag }}
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          version: 10.33.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build AppImage (native, no --containerized)
+        run: |
+          set -euo pipefail
+          pnpm exec tools-pack linux build \
+            --dir "$RUNNER_TEMP/tools-pack" \
+            --portable \
+            --app-version "${{ steps.v.outputs.version }}" \
+            --to appimage \
+            --json | tee "$RUNNER_TEMP/build.json"
+
+      - name: Collect AppImage + checksum
+        id: art
+        run: |
+          set -euo pipefail
+          SRC="$(find "$RUNNER_TEMP/tools-pack" -name '*.AppImage' -type f | head -1)"
+          [ -n "$SRC" ] || { echo "::error::no AppImage produced"; exit 1; }
+          OUT="open-design-${{ steps.v.outputs.version }}-linux-x86_64.AppImage"
+          cp "$SRC" "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          echo "file=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          name: Open Design ${{ steps.v.outputs.version }} (Linux x86_64)
+          body: |
+            Unofficial Linux AppImage build of
+            [nexu-io/open-design](https://github.com/nexu-io/open-design) `${{ steps.v.outputs.tag }}`.
+
+            Built natively on ubuntu-latest — requires **glibc >= 2.39** (fine for modern Arch/CachyOS).
+            Licensed Apache-2.0. Not affiliated with or endorsed by nexu-io.
+          files: |
+            ${{ steps.art.outputs.file }}
+            ${{ steps.art.outputs.file }}.sha256
+
+      - name: Trigger self-hosted pacman repo
+        run: gh workflow run pacman-repo.yml -f version="${{ steps.v.outputs.version }}"
+
+      # AUR stays dormant until you set repo variable ENABLE_AUR=true and the
+      # AUR_SSH_PRIVATE_KEY secret (i.e. once your AUR account exists).
+      - name: Trigger AUR publish
+        if: ${{ vars.ENABLE_AUR == 'true' }}
+        run: gh workflow run aur-publish.yml -f version="${{ steps.v.outputs.version }}"

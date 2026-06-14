@@ -1,0 +1,47 @@
+name: sync-upstream
+
+# Poll nexu-io/open-design for new STABLE releases. When a tag appears that we
+# haven't built yet, dispatch build-linux-appimage. There is no webhook from
+# upstream, so a schedule is the trigger (plus manual workflow_dispatch).
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # dispatch build-linux-appimage
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: nexu-io/open-design
+    steps:
+      - name: Latest upstream release tag
+        id: up
+        run: |
+          set -euo pipefail
+          TAG="$(gh release view --repo "$UPSTREAM" --json tagName -q .tagName)"
+          [ -n "$TAG" ] || { echo "::error::could not read upstream latest release"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: $TAG"
+
+      - name: Already released here?
+        id: have
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.up.outputs.tag }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Already have ${{ steps.up.outputs.tag }} — nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch build for new tag
+        if: steps.have.outputs.exists == 'false'
+        run: |
+          echo "New upstream tag ${{ steps.up.outputs.tag }} -> dispatching build."
+          gh workflow run build-linux-appimage.yml -f tag="${{ steps.up.outputs.tag }}"

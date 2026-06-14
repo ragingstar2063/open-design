@@ -1,0 +1,65 @@
+# Maintainer: ragingstar2063 <ragingstar2063@users.noreply.github.com>
+#
+# Unofficial Linux build of Open Design (https://github.com/nexu-io/open-design),
+# repackaged from the AppImage published by the fork's CI. The AppImage is kept
+# whole and mounted via FUSE at runtime (install stays ~333 MB instead of the
+# ~1.2 GB an extract-to-/opt would cost). It is extracted only at build time to
+# lift out the icon for menu integration.
+#
+# pkgver and sha256sums are rewritten automatically by the CI publish workflows.
+# depends/.desktop/icon are pinned to the real v0.10.1 AppImage contents.
+
+pkgname=open-design-bin
+_pkgname=open-design
+pkgver=0.10.1
+pkgrel=1
+pkgdesc="Local-first, open-source Claude Design alternative — Studio UI + MCP for coding agents (unofficial AppImage build)"
+arch=('x86_64')
+url="https://github.com/ragingstar2063/open-design"
+license=('Apache-2.0')
+# fuse2 mounts the AppImage at runtime; the rest are the Electron/Chromium libs
+# the bundled runtime links against (verified via ldd of the v0.10.1 binary —
+# libnotify/libXss/libXtst/libappindicator ship bundled inside the AppImage).
+depends=('fuse2' 'gtk3' 'nss' 'alsa-lib' 'libcups' 'libxkbcommon' 'libdrm' 'mesa')
+optdepends=('claude-code: drive designs from the Claude Code CLI')
+provides=('open-design')
+conflicts=('open-design' 'open-design-git')
+options=('!strip')
+_appimage="${_pkgname}-${pkgver}-linux-x86_64.AppImage"
+source=("${_appimage}::https://github.com/ragingstar2063/open-design/releases/download/${_pkgname}-v${pkgver}/${_appimage}")
+sha256sums=('SKIP')
+noextract=("${_appimage}")
+
+prepare() {
+  chmod +x "${_appimage}"
+  # Extract only to lift out the icon; the AppImage itself is installed whole.
+  ./"${_appimage}" --appimage-extract >/dev/null
+}
+
+package() {
+  # The AppImage itself (kept compressed; mounted via FUSE at runtime).
+  install -Dm755 "${_appimage}" "${pkgdir}/opt/${_pkgname}/${_pkgname}.AppImage"
+
+  # Launcher.
+  install -d "${pkgdir}/usr/bin"
+  printf '#!/bin/sh\nexec "/opt/%s/%s.AppImage" --no-sandbox "$@"\n' "${_pkgname}" "${_pkgname}" \
+    > "${pkgdir}/usr/bin/${_pkgname}"
+  chmod 755 "${pkgdir}/usr/bin/${_pkgname}"
+
+  # Desktop entry.
+  install -d "${pkgdir}/usr/share/applications"
+  cat > "${pkgdir}/usr/share/applications/${_pkgname}.desktop" <<EOF
+[Desktop Entry]
+Name=Open Design
+Comment=Local-first, open-source Claude Design alternative
+Exec=${_pkgname} %U
+Icon=${_pkgname}
+Type=Application
+Categories=Development;
+StartupWMClass=Open Design
+Terminal=false
+EOF
+
+  # Icon (lifted from the extracted AppImage).
+  install -Dm644 "squashfs-root/Open Design.png" "${pkgdir}/usr/share/pixmaps/${_pkgname}.png"
+}

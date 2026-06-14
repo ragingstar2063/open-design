@@ -1,0 +1,78 @@
+name: pacman-repo
+
+# Build the Arch package from aur/open-design-bin/PKGBUILD inside an Arch
+# container, assemble a pacman repo database, and publish both as assets on a
+# fixed `arch-repo` release. Users add one [open-design] block to pacman.conf
+# and update via plain `pacman -Syu` — NO AUR account required.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package, e.g. 0.10.1"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    env:
+      VERSION: ${{ github.event.inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Install tooling + non-root build user
+        run: |
+          set -euo pipefail
+          pacman -Syu --noconfirm --needed git curl sudo github-cli
+          useradd -m builder
+          printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+
+      - name: Checkout (for the PKGBUILD)
+        uses: actions/checkout@v6
+
+      - name: Render PKGBUILD (pkgver + real sha256 of the released AppImage)
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${{ github.repository }}/releases/download/open-design-v${VERSION}/open-design-${VERSION}-linux-x86_64.AppImage"
+          curl -fL --retry 10 --retry-delay 15 --retry-connrefused -o /tmp/app.AppImage "$URL"
+          SHA="$(sha256sum /tmp/app.AppImage | cut -d' ' -f1)"
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${VERSION}/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums=.*/sha256sums=('${SHA}')/" \
+            aur/open-design-bin/PKGBUILD
+          echo "----- rendered PKGBUILD -----"; cat aur/open-design-bin/PKGBUILD
+
+      - name: makepkg
+        run: |
+          set -euo pipefail
+          install -d build && cp aur/open-design-bin/PKGBUILD build/
+          chown -R builder:builder build
+          # -bin package: only downloads + repackages the AppImage, no compile.
+          sudo -u builder bash -c 'cd build && makepkg -f --noconfirm --cleanbuild'
+          ls -1 build/*.pkg.tar.zst
+
+      - name: Assemble pacman repo database
+        run: |
+          set -euo pipefail
+          install -d repo && cp build/*.pkg.tar.zst repo/
+          ( cd repo && repo-add open-design.db.tar.zst ./*.pkg.tar.zst )
+          ls -l repo
+
+      - name: Publish to the fixed `arch-repo` release
+        run: |
+          set -euo pipefail
+          gh release view arch-repo --repo "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create arch-repo --repo "${{ github.repository }}" \
+                 --title "Arch pacman repo" \
+                 --notes "Self-hosted pacman repo for open-design-bin. Add to /etc/pacman.conf; auto-updated by CI."
+          # --clobber replaces the previous db + package assets in place.
+          gh release upload arch-repo --repo "${{ github.repository }}" --clobber \
+            repo/open-design.db repo/open-design.db.tar.zst \
+            repo/open-design.files repo/open-design.files.tar.zst \
+            repo/*.pkg.tar.zst

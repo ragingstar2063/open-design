@@ -1,0 +1,65 @@
+name: aur-publish
+
+# Render the PKGBUILD for a released version (bump pkgver + real sha256 of the
+# published AppImage) and push it to the AUR. Triggered automatically at the end
+# of build-linux-appimage, or manually.
+#
+# Required repo configuration (Settings -> Secrets and variables -> Actions):
+#   secret  AUR_SSH_PRIVATE_KEY  - private key whose PUBLIC key is registered on your AUR account
+#   var     AUR_USERNAME         - your AUR account username (for the commit author)
+#   var     AUR_EMAIL            - email registered with AUR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, e.g. 0.10.1"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ github.event.inputs.version }}
+    steps:
+      - name: Checkout this repo (for the PKGBUILD)
+        uses: actions/checkout@v6
+
+      - name: Download released AppImage + compute sha256
+        id: sum
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${{ github.repository }}/releases/download/open-design-v${VERSION}/open-design-${VERSION}-linux-x86_64.AppImage"
+          echo "Fetching $URL"
+          curl -fL --retry 10 --retry-delay 15 --retry-connrefused -o app.AppImage "$URL"
+          echo "sha256=$(sha256sum app.AppImage | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Render PKGBUILD
+        run: |
+          set -euo pipefail
+          sed -i \
+            -e "s/^pkgver=.*/pkgver=${VERSION}/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums=.*/sha256sums=('${{ steps.sum.outputs.sha256 }}')/" \
+            aur/open-design-bin/PKGBUILD
+          echo "----- rendered PKGBUILD -----"
+          cat aur/open-design-bin/PKGBUILD
+
+      # NOTE: verify/pin this action to its current release before enabling.
+      # It generates .SRCINFO itself (makepkg --printsrcinfo) and pushes to AUR.
+      - name: Publish to AUR
+        uses: KSXGitHub/github-actions-deploy-aur@v4
+        with:
+          pkgname: open-design-bin
+          pkgbuild: aur/open-design-bin/PKGBUILD
+          commit_username: ${{ vars.AUR_USERNAME }}
+          commit_email: ${{ vars.AUR_EMAIL }}
+          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          commit_message: "open-design-bin ${{ env.VERSION }} (automated)"
+          updpkgsums: false
+          test: false
