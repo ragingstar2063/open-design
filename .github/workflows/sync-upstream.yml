@@ -44,4 +44,4 @@ jobs:
         if: steps.have.outputs.exists == 'false'
         run: |
           echo "New upstream tag ${{ steps.up.outputs.tag }} -> dispatching build."
-          gh workflow run build-linux-appimage.yml -f tag="${{ steps.up.outputs.tag }}"
+          gh workflow run build-linux-appimage.yml --repo "${{ github.repository }}" -f tag="${{ steps.up.outputs.tag }}"
