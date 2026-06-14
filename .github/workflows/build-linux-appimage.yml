@@ -36,6 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      # softprops/action-gh-release@v2 still ships Node20 (deprecated 2026-06-16);
+      # force Node24 so the release step keeps working through the transition.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
     steps:
       - name: Resolve tag + version
         id: v
