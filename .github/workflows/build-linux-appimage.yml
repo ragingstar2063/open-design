@@ -103,10 +103,10 @@ jobs:
             ${{ steps.art.outputs.file }}.sha256
 
       - name: Trigger self-hosted pacman repo
-        run: gh workflow run pacman-repo.yml -f version="${{ steps.v.outputs.version }}"
+        run: gh workflow run pacman-repo.yml --repo "${{ github.repository }}" -f version="${{ steps.v.outputs.version }}"
 
       # AUR stays dormant until you set repo variable ENABLE_AUR=true and the
       # AUR_SSH_PRIVATE_KEY secret (i.e. once your AUR account exists).
       - name: Trigger AUR publish
         if: ${{ vars.ENABLE_AUR == 'true' }}
-        run: gh workflow run aur-publish.yml -f version="${{ steps.v.outputs.version }}"
+        run: gh workflow run aur-publish.yml --repo "${{ github.repository }}" -f version="${{ steps.v.outputs.version }}"
